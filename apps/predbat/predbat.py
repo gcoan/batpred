@@ -36,10 +36,10 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.23.1"
+THIS_VERSION = "v8.25.0"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py"]
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -77,6 +77,7 @@ from octopus import Octopus, OctopusAPI
 from energydataservice import Energidataservice
 from solcast import Solcast
 from gecloud import GECloud, GECloudDirect
+from ohme import OhmeAPI
 from execute import Execute
 from plan import Plan
 from fetch import Fetch
@@ -84,6 +85,7 @@ from output import Output
 from userinterface import UserInterface
 from alertfeed import Alertfeed
 from compare import Compare
+from plugin_system import PluginSystem
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
@@ -350,6 +352,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.ge_cloud_direct_task = None
         self.octopus_api_direct = None
         self.octopus_api_direct_task = None
+        self.ohme_api_direct = None
+        self.ohme_api_direct_task = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.comparison = None
         self.predheat = None
@@ -361,6 +365,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.stop_thread = False
         self.solcast_api_limit = None
         self.solcast_api_used = None
+
+        # Solcast API request metrics for monitoring
+        self.solcast_requests_total = 0
+        self.solcast_failures_total = 0
+        self.solcast_last_success_timestamp = None
+
+        # Forecast.solar API request metrics for monitoring
+        self.forecast_solar_requests_total = 0
+        self.forecast_solar_failures_total = 0
+        self.forecast_solar_last_success_timestamp = None
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         self.pool = None
         self.watch_list = []
@@ -375,6 +389,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.manual_demand_times = []
         self.manual_all_times = []
         self.manual_api = []
+        self.manual_import_rates = {}
+        self.manual_export_rates = {}
+        self.manual_load_adjust = {}
         self.config_index = {}
         self.dashboard_index = []
         self.dashboard_index_app = {}
@@ -386,6 +403,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.plan_valid = False
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
+        self.plugin_system = None
         self.calculate_plan_every = 5
         self.prediction_started = False
         self.update_pending = True
@@ -870,6 +888,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.expose_config("active", False)
         self.save_current_config()
 
+        # Call plugin update hooks
+        if self.plugin_system:
+            self.plugin_system.call_hooks("on_update")
+
         if self.comparison:
             if (scheduled and self.minutes_now < RUN_EVERY) or self.get_arg("compare_active", False):
                 # Compare tariffs either when triggered or daily at midnight
@@ -1272,6 +1294,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             if not self.octopus_api_direct_task.is_alive():
                 return False
 
+        if self.ohme_api_direct_task:
+            # Check if the task is still running
+            if not self.ohme_api_direct_task.is_alive():
+                return False
+
         if self.ge_cloud_direct_task:
             # Check if the task is still running
             if not self.ge_cloud_direct_task.is_alive():
@@ -1327,17 +1354,23 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             self.web_interface_task = None
             self.log("Starting web interface")
             self.web_interface = WebInterface(self)
+
+            # Initialize plugin system and discover plugins
+            self.init_plugin_system()
+
             self.web_interface_task = self.create_task(self.web_interface.start())
 
-            if self.get_arg("octopus_api_key", "") and self.get_arg("octopus_api_account", ""):
+            # Octopus API
+            if self.get_arg("octopus_api_key", "", indirect=False) and self.get_arg("octopus_api_account", "", indirect=False):
                 self.log("Starting Octopus API interface")
-                self.octopus_api_direct = OctopusAPI(self.get_arg("octopus_api_key", ""), self.get_arg("octopus_api_account", ""), self)
+                self.octopus_api_direct = OctopusAPI(self.get_arg("octopus_api_key", "", indirect=False), self.get_arg("octopus_api_account", "", indirect=False), self)
                 self.octopus_api_direct_task = self.create_task(self.octopus_api_direct.start())
                 if not self.octopus_api_direct.wait_api_started():
                     self.log("Error: Octopus API failed to start")
                     self.record_status("Error: Octopus API failed to start")
                     raise ValueError("Octopus API failed to start")
 
+            # GE Cloud Direct API
             if self.get_arg("ge_cloud_direct", False):
                 self.log("Starting GE cloud direct interface")
                 self.ge_cloud_direct = GECloudDirect(self)
@@ -1347,6 +1380,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                     self.log("Error: GE Cloud API failed to start")
                     self.record_status("Error: GE Cloud API failed to start")
                     raise ValueError("GE Cloud API failed to start")
+
+            # Ohme API
+            if self.get_arg("ohme_login", "", indirect=False) and self.get_arg("ohme_password", "", indirect=False):
+                self.log("Starting Ohme API interface")
+                self.ohme_api_direct = OhmeAPI(self, self.get_arg("ohme_login", "", indirect=False), self.get_arg("ohme_password", "", indirect=False), self.get_arg("ohme_automatic_octopus_intelligent", False))
+                self.ohme_api_direct_task = self.create_task(self.ohme_api_direct.start())
+                if not self.ohme_api_direct.wait_api_started():
+                    self.log("Error: Ohme API failed to start")
+                    self.record_status("Error: Ohme API failed to start")
+                    raise ValueError("Ohme API failed to start")
+            else:
+                self.log("Ohme EV charger not configured")
 
             # Printable config root
             self.config_root_p = self.config_root
@@ -1412,6 +1457,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
             await self.web_interface.stop()
         if self.ge_cloud_direct:
             await self.ge_cloud_direct.stop()
+        if self.ohme_api_direct:
+            await self.ohme_api_direct.stop()
         if self.octopus_api_direct:
             self.octopus_api_direct.stop()
         if self.ha_interface:
@@ -1530,3 +1577,28 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
                 self.log("Error: " + traceback.format_exc())
                 self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
                 raise e
+
+    def init_plugin_system(self):
+        """
+        Initialize the plugin system and discover plugins
+        """
+        try:
+            self.log("Initializing plugin system")
+            self.plugin_system = PluginSystem(self)
+
+            # Discover and load plugins
+            self.plugin_system.discover_plugins()
+
+            # Call initialization hooks
+            self.plugin_system.call_hooks("on_init")
+
+        except Exception as e:
+            self.log("Warning: Failed to initialize plugin system: {}".format(e))
+            self.plugin_system = None
+
+    def register_hook(self, hook_name, callback):
+        """
+        Register a hook callback (convenience method for plugins)
+        """
+        if self.plugin_system:
+            self.plugin_system.register_hook(hook_name, callback)

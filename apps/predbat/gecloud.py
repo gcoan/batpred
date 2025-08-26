@@ -208,6 +208,14 @@ class GECloudDirect:
         self.register_entity_map = {}
         self.long_poll_active = False
         self.pending_writes = {}
+        self.evc_device = {}
+        self.evc_data = {}
+        self.evc_sessions = {}
+
+        # API request metrics for monitoring
+        self.requests_total = 0
+        self.failures_total = 0
+        self.last_success_timestamp = None
 
     def wait_api_started(self):
         """
@@ -374,6 +382,49 @@ class GECloudDirect:
                 self.base.dashboard_item(entity_name + "_battery_size", capacity, attributes=attribute_table.get("battery_size", {}), app="gecloud")
                 self.base.dashboard_item(entity_name + "_max_charge_rate", max_charge_rate, attributes=attribute_table.get("max_charge_rate", {}), app="gecloud")
                 self.base.dashboard_item(entity_name + "_battery_dod", dod, attributes=attribute_table.get("_battery_dod", {}), app="gecloud")
+
+    async def publish_evc_data(self, serial, evc_data):
+        """
+        Data passed in is a dictionary of measurands according to EVC_DATA_POINTS
+        """
+        for key in evc_data:
+            entity_name = "sensor.predbat_gecloud_" + serial
+            entity_name = entity_name.lower()
+            measurand = EVC_DATA_POINTS.get(key, None)
+            if measurand:
+                state = evc_data[key]
+                if measurand == "Current.Export":
+                    self.base.dashboard_item(entity_name + "_evc_current_export", state=state, attributes={"friendly_name": "EV Charger Current Export", "icon": "mdi:ev-station", "unit_of_measurement": "A", "device_class": "current"}, app="gecloud")
+                elif measurand == "Current.Import":
+                    self.base.dashboard_item(entity_name + "_evc_current_import", state=state, attributes={"friendly_name": "EV Charger Current Import", "icon": "mdi:ev-station", "unit_of_measurement": "A", "device_class": "current"}, app="gecloud")
+                elif measurand == "Current.Offered":
+                    self.base.dashboard_item(entity_name + "_evc_current_offered", state=state, attributes={"friendly_name": "EV Charger Current Offered", "icon": "mdi:ev-station", "unit_of_measurement": "A", "device_class": "current"}, app="gecloud")
+                elif measurand == "Energy.Active.Export.Register":
+                    self.base.dashboard_item(
+                        entity_name + "_evc_energy_active_export_register", state=state, attributes={"friendly_name": "EV Charger Total Export", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy"}, app="gecloud"
+                    )
+                elif measurand == "Energy.Active.Import.Register":
+                    self.base.dashboard_item(
+                        entity_name + "_evc_energy_active_import_register", state=state, attributes={"friendly_name": "EV Charger Total Import", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy"}, app="gecloud"
+                    )
+                elif measurand == "Frequency":
+                    self.base.dashboard_item(entity_name + "_evc_frequency", state=state, attributes={"friendly_name": "EV Charger Frequency", "icon": "mdi:ev-station", "unit_of_measurement": "Hz", "device_class": "frequency"}, app="gecloud")
+                elif measurand == "Power.Active.Export":
+                    self.base.dashboard_item(entity_name + "_evc_power_active_export", state=state, attributes={"friendly_name": "EV Charger Export Power", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power"}, app="gecloud")
+                elif measurand == "Power.Active.Import":
+                    self.base.dashboard_item(entity_name + "_evc_power_active_import", state=state, attributes={"friendly_name": "EV Charger Import Power", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power"}, app="gecloud")
+                elif measurand == "Power.Factor":
+                    self.base.dashboard_item(entity_name + "_evc_power_factor", state=state, attributes={"friendly_name": "EV Charger Power Factor", "icon": "mdi:ev-station", "unit_of_measurement": "*", "device_class": "power_factor"}, app="gecloud")
+                elif measurand == "Power.Offered":
+                    self.base.dashboard_item(entity_name + "_evc_power_offered", state=state, attributes={"friendly_name": "EV Charger Power Offered", "icon": "mdi:ev-station", "unit_of_measurement": "W", "device_class": "power"}, app="gecloud")
+                elif measurand == "SoC":
+                    self.base.dashboard_item(entity_name + "_evc_soc", state=state, attributes={"friendly_name": "EV Charger State of Charge", "icon": "mdi:ev-station", "unit_of_measurement": "%", "device_class": "battery"}, app="gecloud")
+                elif measurand == "Temperature":
+                    self.base.dashboard_item(entity_name + "_evc_temperature", state=state, attributes={"friendly_name": "EV Charger Temperature", "icon": "mdi:ev-station", "unit_of_measurement": "°C", "device_class": "temperature"}, app="gecloud")
+                elif measurand == "Voltage":
+                    self.base.dashboard_item(entity_name + "_evc_voltage", state=state, attributes={"friendly_name": "EV Charger Voltage", "icon": "mdi:ev-station", "unit_of_measurement": "V", "device_class": "voltage"}, app="gecloud")
+                elif measurand == "RPM":
+                    self.base.dashboard_item(entity_name + "_evc_rpm", state=state, attributes={"friendly_name": "EV Charger Fan Speed", "icon": "mdi:ev-station", "unit_of_measurement": "RPM"}, app="gecloud")
 
     async def publish_status(self, device, status):
         """
@@ -631,6 +682,7 @@ class GECloudDirect:
         self.polling_mode = True
         # Get devices using the modified auto-detection (returns dict)
         devices_dict = await self.async_get_devices()
+        evc_devices_dict = await self.async_get_evc_devices()
 
         # Build a list of devices to poll:
         # Use all battery inverter serials and also add the EMS device if it's distinct.
@@ -644,9 +696,14 @@ class GECloudDirect:
             if ems_device not in device_list:
                 device_list.append(ems_device)
 
-        devices = device_list
-        self.log("GECloud: Starting up, found devices {}".format(devices))
-        for device in devices:
+        evc_device_list = []
+        for device in evc_devices_dict:
+            uuid = device.get("uuid", None)
+            device_name = device.get("alias", None)
+            evc_device_list.append(uuid)
+
+        self.log("GECloud: Starting up, found devices {} evc_devices {}".format(device_list, evc_device_list))
+        for device in device_list:
             self.pending_writes[device] = []
 
         if self.automatic:
@@ -656,15 +713,21 @@ class GECloudDirect:
         while not self.stop_cloud and not self.base.fatal_error:
             try:
                 if seconds % 60 == 0:
-                    for device in devices:
+                    for device in device_list:
                         self.status[device] = await self.async_get_inverter_status(device)
                         await self.publish_status(device, self.status[device])
                         self.meter[device] = await self.async_get_inverter_meter(device)
                         await self.publish_meter(device, self.meter[device])
                         self.info[device] = await self.async_get_device_info(device)
                         await self.publish_info(device, self.info[device])
+                    for uuid in evc_device_list:
+                        self.evc_device[uuid] = await self.async_get_evc_device(uuid)
+                        serial = self.evc_device[uuid].get("serial", "unknown")
+                        self.evc_data[uuid] = await self.async_get_evc_device_data(uuid)
+                        self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid)
+                        self.publish_evc_data(serial, self.evc_data[uuid])
                 if seconds % 300 == 0:
-                    for device in devices:
+                    for device in device_list:
                         if seconds == 0 or self.polling_mode or (device == ems_device):
                             self.settings[device] = await self.async_get_inverter_settings(device, first=False, previous=self.settings.get(device, {}))
                             await self.publish_registers(device, self.settings[device])
@@ -673,7 +736,7 @@ class GECloudDirect:
                 self.log("Error: GECloud: Exception in main loop {}".format(e))
 
             # Clear pending writes
-            for device in devices:
+            for device in device_list:
                 if device in self.pending_writes:
                     self.pending_writes[device] = []
 
@@ -1056,6 +1119,9 @@ class GECloudDirect:
         """
         Basic API call to GE Cloud
         """
+        # Increment request counter
+        self.requests_total += 1
+
         url = GE_API_URL + endpoint.format(inverter_serial_number=serial, setting_id=setting_id, uuid=uuid, start_time=start_time, end_time=end_time, meter_ids=meter_ids, command=command)
         headers = {
             "Authorization": "Bearer " + self.api_key,
@@ -1073,6 +1139,7 @@ class GECloudDirect:
                 response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=TIMEOUT)
         except requests.exceptions.RequestException as e:
             self.log(f"Warn: GECloud: Exception during request to {url}: {e}")
+            self.failures_total += 1
             return None
 
         try:
@@ -1095,12 +1162,15 @@ class GECloudDirect:
         if response.status_code in [200, 201]:
             if data is None:
                 data = {}
+            self.last_success_timestamp = time.time()
             return data
         if response.status_code in [401, 403, 404, 422]:
             # Unauthorized
+            self.failures_total += 1
             return {}
         if response.status_code == 429:
             # Rate limiting so wait up to 30 seconds
+            self.failures_total += 1
             await asyncio.sleep(random.random() * 30)
         return None
 

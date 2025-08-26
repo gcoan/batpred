@@ -790,6 +790,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=self.metric_load_divergence,
+            load_adjust=self.manual_load_adjust,
         )
         load_minutes_step10 = self.step_data_history(
             self.load_minutes,
@@ -801,6 +802,7 @@ class Plan:
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
             cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
+            load_adjust=self.manual_load_adjust,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None, flip=True)
@@ -4086,13 +4088,13 @@ class Plan:
                 for window in self.car_charging_slots[car_n]:
                     start = window["start"]
                     end = window["end"]
-                    if end != start:
-                        kwh = dp2(window["kwh"]) / (end - start)
-                    else:
-                        kwh = dp2(window["kwh"])
-                    for minute_offset in range(minute_start, minute_end, PREDICT_STEP):
-                        if minute_offset >= start and minute_offset < end:
-                            car_charging_kwh += kwh * PREDICT_STEP
+                    if start < minute_end and end > minute_start:
+                        kwh = 0
+                        if end != start:
+                            kwh = dp2(window["kwh"]) / (end - start)
+                        for minute_offset in range(minute_start, minute_end, PREDICT_STEP):
+                            if minute_offset >= start and minute_offset < end:
+                                car_charging_kwh += kwh * PREDICT_STEP
             car_charging_kwh = dp2(car_charging_kwh)
         return car_charging_kwh
 

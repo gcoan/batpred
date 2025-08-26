@@ -497,6 +497,8 @@ class Output:
                 symbol = "? &#x2696;"
             elif adjust_type == "user":
                 symbol = "&#61;"
+            elif adjust_type == "manual":
+                symbol = "&#8526;"
             elif adjust_type == "increment":
                 symbol = "&#177;"
             elif adjust_type == "saving":
@@ -1147,6 +1149,9 @@ class Output:
 
             load_forecast = str(load_forecast)
 
+            if minute in self.manual_load_adjust:
+                load_forecast += " &#8526;"
+
             if plan_debug and load_forecast10 > 0.0:
                 load_forecast += " (%s)" % (str(load_forecast10))
 
@@ -1387,9 +1392,9 @@ class Output:
 
             # Table row
             html += '<tr style="color:black">'
-            html += "<td bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
-            html += "<td " + cell_style + " bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
-            html += "<td " + cell_style + " bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
+            html += "<td id=time bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
+            html += "<td id=import data-minute=" + str(minute) + " data-rate=" + str(rate_value_import) + " " + cell_style + " bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
+            html += "<td id=export data-minute=" + str(minute) + " data-rate=" + str(rate_value_export) + " " + cell_style + " bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
             if start_span:
                 if split:  # for slots that are both charging and exporting, just output the (split cell) state
                     html += "<td "
@@ -1406,22 +1411,22 @@ class Output:
                 html += cell_style + " "
                 html += "bgcolor=" + state_color + ">" + state + "</td>"
                 html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
-            html += "<td bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
-            html += "<td bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
+            html += "<td id=pv bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
+            html += "<td id=load data-minute=" + str(minute) + " bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
             if plan_debug:
-                html += "<td bgcolor=" + clipped_color + ">" + clipped_str + "</td>"
+                html += "<td id=clip bgcolor=" + clipped_color + ">" + clipped_str + "</td>"
             if plan_debug and self.load_forecast:
-                html += "<td bgcolor=" + extra_color + ">" + str(extra_forecast) + "</td>"
+                html += "<td id=extra bgcolor=" + extra_color + ">" + str(extra_forecast) + "</td>"
             if self.num_cars > 0:  # Don't display car charging data if there's no car
-                html += "<td bgcolor=" + car_color + ">" + car_charging_str + "</td>"
+                html += "<td id=car bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             if self.iboost_enable:
                 html += "<td bgcolor=" + iboost_color + ">" + iboost_amount_str + " </td>"
-            html += "<td bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
-            html += "<td bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
-            html += "<td bgcolor=#FFFFFF>" + str(total_str) + "</td>"
+            html += "<td id=soc bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
+            html += "<td id=cost bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
+            html += "<td id=total_cost bgcolor=#FFFFFF>" + str(total_str) + "</td>"
             if self.carbon_enable:
-                html += "<td bgcolor=" + carbon_intensity_color + ">" + str(carbon_intensity) + " </td>"
-                html += "<td bgcolor=" + carbon_color + "> " + str(carbon_str) + " </td>"
+                html += "<td id=carbon bgcolor=" + carbon_intensity_color + ">" + str(carbon_intensity) + " </td>"
+                html += "<td id=total_carbon bgcolor=" + carbon_color + "> " + str(carbon_str) + " </td>"
             html += "</tr>\n"
 
         # End of plan costs

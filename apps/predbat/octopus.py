@@ -301,6 +301,11 @@ class OctopusAPI:
         self.intelligent_device = {}
         self.api_started = False
         self.cache_path = self.base.config_root + "/cache"
+
+        # API request metrics for monitoring
+        self.requests_total = 0
+        self.failures_total = 0
+        self.last_success_timestamp = None
         if not os.path.exists(self.cache_path):
             os.makedirs(self.cache_path)
         self.cache_file = self.cache_path + "/octopus.yaml"
@@ -661,18 +666,23 @@ class OctopusAPI:
 
         pages = 0
         while url and pages < 3:
+            self.requests_total += 1
             r = requests.get(url)
             if r.status_code not in [200, 201]:
+                self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
                 return {}
             try:
                 data = r.json()
+                self.last_success_timestamp = time.time()
             except requests.exceptions.JSONDecodeError:
+                self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
                 return {}
             if "results" in data:
                 mdata += data["results"]
             else:
+                self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
                 return {}
             url = data.get("next", None)
@@ -832,6 +842,7 @@ class OctopusAPI:
         """
         await self.async_refresh_token()
         try:
+            self.requests_total += 1
             client = await self.api.async_create_client_session()
             url = f"{self.api.base_url}/v1/graphql/"
             payload = {"query": query}
@@ -839,12 +850,15 @@ class OctopusAPI:
             async with client.post(url, json=payload, headers=headers) as response:
                 response_body = await self.async_read_response(response, url, ignore_errors=ignore_errors)
                 if response_body and ("data" in response_body):
+                    self.last_success_timestamp = time.time()
                     return response_body["data"]
                 else:
+                    self.failures_total += 1
                     if returns_data:
                         self.log(f"Warn: Octopus API: Failed to retrieve data from graphql query {request_context}")
                     return None
         except TimeoutError:
+            self.failures_total += 1
             self.log(f"Warn: OctopusAPI: Failed to connect. Timeout of {self.timeout} exceeded.")
 
         return None
@@ -1070,7 +1084,13 @@ class Octopus:
                 self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
                 return pdata
 
-        r = requests.get(url)
+        try:
+            r = requests.get(url)
+        except requests.exceptions.ConnectionError:
+            self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+            self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
+            return None
+
         if r.status_code not in [200, 201]:
             self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
@@ -1125,7 +1145,7 @@ class Octopus:
 
         # Retry up to 3 minutes
         for retry in range(3):
-            pdata = self.download_octopus_rates_func(url)
+            pdata = self.download_octopus_rates_func(url, api=self.octopus_api_direct)
             if pdata:
                 break
 
@@ -1182,7 +1202,7 @@ class Octopus:
         self.log("Warn: Octopus API direct not available (get_octopus_direct tariff {})".format(tariff_type))
         return {}
 
-    def download_octopus_rates_func(self, url):
+    def download_octopus_rates_func(self, url, api=None):
         """
         Download octopus rates directly from a URL
         """
@@ -1193,20 +1213,36 @@ class Octopus:
         while url and pages < 3:
             if self.debug_enable:
                 self.log("Download {}".format(url))
-            r = requests.get(url)
+            try:
+                if api:
+                    api.requests_total += 1
+                r = requests.get(url)
+            except requests.exceptions.ConnectionError:
+                if api:
+                    api.failures_total += 1
+                self.log("Warn: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
+                self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
+                return {}
             if r.status_code not in [200, 201]:
+                if api:
+                    api.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             try:
                 data = r.json()
+                if api:
+                    api.last_success_timestamp = time.time()
             except requests.exceptions.JSONDecodeError:
+                self.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if "results" in data:
                 mdata += data["results"]
             else:
+                if api:
+                    api.failures_total += 1
                 self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
@@ -1346,6 +1382,11 @@ class Octopus:
         else:
             kwh = slot.get("chargeKwh", None)
 
+        # Remove empty slots
+        if kwh is None and location == "" and source == "":
+            return 0, 0, 0, source, location
+
+        # Create kWh if missing
         if kwh is None:
             kwh = org_minutes * self.car_charging_rate[0] / 60.0
 
@@ -1375,7 +1416,17 @@ class Octopus:
         for slot in octopus_slots:
             start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot)
             if kwh > 0:
-                slots_decoded.append((start_minutes, end_minutes, kwh, source, location))
+                # Don't add overlapping slots, bug in Octopus API means that sometimes slots overlap
+                for current_slot in slots_decoded:
+                    current_start, current_end, current_kwh, current_source, current_location = current_slot
+                    if (start_minutes < current_end) and (end_minutes > current_start):
+                        if start_minutes < current_start:
+                            end_minutes = current_start
+                        elif end_minutes > current_end:
+                            start_minutes = current_end
+                # Only add the slot if it has a non-zero duration
+                if start_minutes != end_minutes:
+                    slots_decoded.append((start_minutes, end_minutes, kwh, source, location))
 
         # Sort slots by start time
         slots_sorted = sorted(slots_decoded, key=lambda x: x[0])

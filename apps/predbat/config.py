@@ -26,6 +26,8 @@ TIME_FORMAT_HA_TZ = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_DAILY = "%Y-%m-%d"
 TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
+INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
+INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
@@ -913,6 +915,69 @@ CONFIG_ITEMS = [
         "manual": True,
     },
     {
+        "name": "manual_import_rates",
+        "friendly_name": "Manual import rates",
+        "type": "select",
+        "options": ["off"],
+        "icon": "mdi:state-machine",
+        "default": "off",
+        "restore": False,
+        "manual_rate": True,
+    },
+    {
+        "name": "manual_export_rates",
+        "friendly_name": "Manual export rates",
+        "type": "select",
+        "options": ["off"],
+        "icon": "mdi:state-machine",
+        "default": "off",
+        "restore": False,
+        "manual_rate": True,
+    },
+    {
+        "name": "manual_load_adjust",
+        "friendly_name": "Manual load adjustment",
+        "type": "select",
+        "options": ["off"],
+        "icon": "mdi:state-machine",
+        "default": "off",
+        "restore": False,
+        "manual_rate": True,
+    },
+    {
+        "name": "manual_import_value",
+        "friendly_name": "Manual import value",
+        "type": "input_number",
+        "min": -50,
+        "max": 1000,
+        "step": 0.1,
+        "unit": "p/kWh",
+        "icon": "mdi:currency-usd",
+        "default": 0,
+    },
+    {
+        "name": "manual_export_value",
+        "friendly_name": "Manual export value",
+        "type": "input_number",
+        "min": -50,
+        "max": 1000,
+        "step": 0.1,
+        "unit": "p/kWh",
+        "icon": "mdi:currency-usd",
+        "default": 0,
+    },
+    {
+        "name": "manual_load_value",
+        "friendly_name": "Manual load adjustment value",
+        "type": "input_number",
+        "min": -10,
+        "max": 10,
+        "step": 0.1,
+        "unit": "kWh",
+        "icon": "mdi:currency-usd",
+        "default": 0.5,
+    },
+    {
         "name": "manual_api",
         "friendly_name": "Manual API controls",
         "type": "select",
@@ -1565,7 +1630,7 @@ INVERTER_DEF = {
         "has_ge_inverter_mode": False,
         "time_button_press": False,
         "clock_time_format": "%Y-%m-%dT%H:%M:%S",
-        "write_and_poll_sleep": 5,
+        "write_and_poll_sleep": 10,
         "has_time_window": False,
         "support_charge_freeze": False,
         "support_discharge_freeze": False,
