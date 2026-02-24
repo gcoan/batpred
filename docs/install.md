@@ -454,7 +454,7 @@ To remove the Predbat entities you will need to use a different mechanism and pu
 - 'Settings' / 'Developer Tools' / 'Actions'
 - Search for 'Recorder: Purge Entities'
 - Tick 'Domains to remove' and enter 'predbat' as the domain
-- Tick 'Entity globs to remove' and enter '*.predbat_*'
+- Tick 'Entity globs to remove' and enter '\*.predbat_\*'
 - Tick 'Days to keep' and set to zero days
 
 Then click 'Perform Action'

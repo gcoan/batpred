@@ -161,9 +161,9 @@ predbat:
   class: PredBat
 
   # Enable ML load prediction
-  load_ml_enable: True
-  # Use the output data in Predbat (can be False to explore the use without using the data)
-  load_ml_source: True
+  load_ml_enable: true
+  # Use the output data in Predbat (can be false to explore the use without using the data)
+  load_ml_source: true
 
   # Optional: Maximum days of historical data to fetch from HA on each poll (default: 28)
   # load_ml_max_days_history: 28
@@ -176,7 +176,7 @@ predbat:
 
 - `load_ml_enable`: Enables the ML component (required)
 - `load_ml_source`: When `true`, Predbat uses ML predictions for battery planning. Set to `false` to test predictions without affecting battery control
-- `load_ml_max_days_history`: Maximum days of historical data to fetch from Home Assistant on each poll (every 30 minutes)
+- `load_ml_max_days_history`: Optional maximum days of historical data to fetch from Home Assistant on each poll (every 30 minutes)
     - **Default**: 28 days
     - **Minimum**: 1 day (not recommended for production)
     - **Recommended**: 7-28 days depending on your consumption patterns
@@ -184,7 +184,7 @@ predbat:
     - **When to increase**: If you have very regular weekly patterns or want seasonal awareness
     - **When to decrease**: If your consumption patterns change frequently, or you have limited historical data storage
     - **Note**: Training time increases slightly with more data, but fine-tuning remains fast due to importance-weighted sampling
-- `load_ml_database_days`: Number of days of history to accumulate and persist in the on-disk database file (`predbat_ml_history.npz`)
+- `load_ml_database_days`: Optional number of days of history to accumulate and persist in the on-disk database file (`predbat_ml_history.npz`)
     - **Default**: 90 days
     - **How it works**: See [History Accumulation and the Database](#history-accumulation-and-the-database) below
     - **When to increase**: If you want the model to learn long-term seasonal patterns (e.g. summer vs winter)
@@ -199,7 +199,7 @@ The ML component maintains two distinct layers of historical data:
 Every 30 minutes the component fetches the most recent N days of sensor history from Home Assistant. This is limited by your HA recorder retention — if HA only stores 14 days then that is all you will get regardless of what `load_ml_max_days_history` is set to.
 
 **Accumulated database layer** (`load_ml_database_days`):
-After each successful fetch, the newly fetched data is *merged* with the existing in-memory dataset and saved to `predbat_ml_history.npz`. This means history accumulates over time, well beyond what a single HA fetch can provide. For example with a 14-day HA retention and `load_ml_database_days: 90` set, after 90 days of running the model will have 90 days of load history to train on — far more than HA alone could supply.
+After each successful fetch, the newly fetched data is *merged* with the existing in-memory dataset and saved to `predbat_ml_history.npz`. This means history accumulates over time, well beyond what a single HA fetch can provide. For example with a 14-day HA retention and the default `load_ml_database_days: 90` set, after 90 days of running the model will have 90 days of load history to train on — far more than HA alone could supply.
 
 **How the merge works:**
 Before each fetch the existing in-memory data is time-shifted forward so that all keys remain anchored to "minutes ago from now". Fresh data from HA is then merged on top, with the fresh values taking priority for the most recent period. Older keys that have shifted beyond `load_ml_database_days` are dropped.
@@ -208,7 +208,7 @@ This means:
 
 - `load_ml_max_days_history` controls how much fresh data is pulled from HA each cycle (bounded by HA retention)
 - `load_ml_database_days` controls the total depth of the training dataset that accumulates on disk
-- Setting `load_ml_database_days` to 0 or leaving `load_ml_database_days` unset disables the database entirely — training only ever uses what HA currently has
+- Setting `load_ml_database_days` to 0 disables the database entirely — training only ever uses what entity history HA currently has
 - The age reported in logs and the `training_days` attribute reflects the actual depth of the accumulated dataset, computed from the furthest key present in memory
 
 For best results:
@@ -250,7 +250,7 @@ predbat:
 ### Optional: Subtract Car Charging
 
 If you have an EV charger set in Predbat then this will be subtracted from predictions.
-If this is not set then the default EV charging threshold is used if car_charging_hold is True.
+If this is not set then the default EV charging threshold is used if **switch.predbat_car_charging_hold** is On.
 
 ```yaml
 predbat:

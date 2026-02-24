@@ -467,8 +467,8 @@ Predbat accepts no responsibility for any violations:
 
 ```yaml
   futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
-  futurerate_adjust_import: True
-  futurerate_adjust_export: False
+  futurerate_adjust_import: true
+  futurerate_adjust_export: false
   futurerate_peak_start: "16:00:00"
   futurerate_peak_end: "19:00:00"
 ```
@@ -487,10 +487,10 @@ The following configuration options for the Axle VPP can be set in `apps.yaml`:
 
 - **axle_api_key** - Sets your API key to communicate with the Axle Energy VPP (Virtual Power Plant) service
 - **axle_pence_per_kwh** - Sets the payment rate in pence per kWh for Axle Energy VPP events (optional, default: 100)
-- **axle_automatic** - When True (default) Predbat will automatically use **binary_sensor.predbat_axle_event** to record details of current and historic Axle events
+- **axle_automatic** - When `true` (default) Predbat will automatically use **binary_sensor.predbat_axle_event** to record details of current and historic Axle events
 - **axle_session** - Optional, enables you to manually configure the Axle binary sensor name if you don't wish to use the Predbat default name
-- **axle_control** - Optional, when set to True will set Predbat into Read-Only mode for the duration of the Axle session so Axle can control your inverter. The Predbat status will show "Read-Only (Axle)" when this is active in an Axle session.
-Defaults to False so Predbat will control export of your inverter according to the Axle event details.
+- **axle_control** - Optional, when set to `true` will set Predbat into Read-Only mode for the duration of the Axle session so Axle can control your inverter. The Predbat status will show "Read-Only (Axle)" when this is active in an Axle session.
+Defaults to `false` so Predbat will control export of your inverter according to the Axle event details.
 
 To use the Axle VPP service only **axle_api_key** is required to be configured in `apps.yaml`, the other configuration options are optional.
 
@@ -505,7 +505,7 @@ The National Grid provides this data, you can have Predbat fetch it directly by 
 ```yaml
   # Carbon Intensity data from National grid
   carbon_postcode: 'SW1 5NA'
-  carbon_automatic: True
+  carbon_automatic: true
 ```
 
 This direct connection will also set **sensor.predbat_carbon** with the current carbon data.

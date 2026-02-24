@@ -14,15 +14,14 @@ Set to 0 if you don't have an EV or don't want Predbat to plan for your EV charg
 NB: num_cars must be set correctly regardless of whether you are using Octopus Intelligent Go to control your EV charging or Predbat to control the charging;
 or else Predbat could start discharging your battery when the EV is charging.
 
-- **car_charging_exclusive** should be set to True for each car in `apps.yaml` if you have multiple cars configured in Predbat, but only one car charger.
+- **car_charging_exclusive** should be set to `true` for each car in `apps.yaml` if you have multiple cars configured in Predbat, but only one car charger.
 This indicates that only one car may charge at once (the first car reporting as plugged in will be considered as charging).
-If you set this to False for each car then it is assumed that the car can charge independently, and hence two or more cars could charge at once.
-One entry per car.
+If you set this to `false` for each car then it is assumed that the cars can charge independently, and hence two or more cars could charge at once. One entry per car.
 
 ```yaml
   car_charging_exclusive:
-    - True
-    - True
+    - true
+    - true
 ```
 
 ### Filtering Car Charging Energy from house load
@@ -91,7 +90,7 @@ Predbat uses the time entity (time.octopus_energy_{{DEVICE_ID}}_intelligent_targ
 
 - **octopus_charge_limit** - Points to the Octopus Energy integration sensor that provides the car charging limit.
 
-- **octopus_slot_low_rate** - Default is True, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If False the existing rates only will be used which is only suitable for tariffs other than IOG.
+- **octopus_slot_low_rate** - Default is `true`, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If `false` the existing rates only will be used which is only suitable for tariffs other than IOG.
 
 - **octopus_slot_max** - Default is 48 (disabled). Sets the maximum number of 30-minute cheap rate slots per 24-hour period.
 Octopus Intelligent users maybe from March 2026 limited to 6 hours of cheap charging per day. Slots beyond this limit will use standard rates.
@@ -101,7 +100,7 @@ If you don't use Intelligent Octopus then the above Octopus Intelligent configur
 
 - **car_charging_planned** - Optional, can be set to a Home Assistant sensor (e.g. from your car charger integration)
 which lets Predbat know the car is plugged in and planned to charge during low-rate slots.
-Or manually set it to 'False' to disable this feature, or 'True' to always enable it.<BR>
+Or manually set it to 'false' to disable this feature, or 'true' to always enable it.<BR>
 The `apps.yaml` template supplied with Predbat comes pre-configured with a regular expression that should automatically match Zappi or Wallbox car chargers.
 If you have a different type of charger you will need to configure it manually.
 
@@ -159,7 +158,7 @@ An excellent [worked example of setting up multiple car charging with Predbat](h
 
 Predbat can talk directly to the Ohme charger by configuring your Ohme account details in `apps.yaml`.
 
-When **ohme_automatic_octopus_intelligent** is set to True then Predbat is automatically configured to take Octopus Intelligent car charging slots from Ohme (rather than from Octopus Intelligent directly).
+When **ohme_automatic_octopus_intelligent** is set to `true` then Predbat is automatically configured to take Octopus Intelligent car charging slots from Ohme (rather than from Octopus Intelligent directly).
 
 ```yaml
   ohme_login: "user@domain"
@@ -286,19 +285,6 @@ NOTE: [Multiple cars](car-charging.md#multiple-electric-cars) can be planned wit
 
 ## Additional Car charging configurations
 
-- If you have one charger and multiple cars configured in Predbat then set **car_charging_exclusive** in `apps.yaml` to `True` to indicate that only one
-car may charge at once (the first car reporting as plugged in will be considered as charging). If you set this to `False` then it is assumed each car
-can charge independently and hence two or more could charge at once
-
-```yaml
-  car_charging_exclusive:
-    - True
-    - True
-```
-
-- See [Car charging filtering](#filtering-car-charging-energy-from-house-load) and [Planned car charging](#planned-car-charging)
-for further car charging setup details.
-
 - **switch.predbat_car_charging_from_battery** - When set to On the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
 When set to Off home battery discharge will be prevented when your car charges, and all load from the car and home will be from the grid.
 This is achieved by setting the battery discharge rate to 0 during car charging and to the maximum otherwise.
@@ -308,7 +294,10 @@ e.g. you are using Intelligent Octopus or you use the car slots in Predbat to co
 - **input_number.predbat_car_charging_loss** gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
 A good setting is 0.08 which is 8%.
 
-- **switch.predbat_metric_dynamic_load_adjust** (default False) - If turned off then Predbat won't export during times the car is planned to charge even if the car is not charging.
+- **switch.predbat_metric_dynamic_load_adjust** (default `false`) - If turned off then Predbat won't export during times the car is planned to charge even if the car is not charging.
+
+- See [Car charging filtering](#filtering-car-charging-energy-from-house-load) and [Planned car charging](#planned-car-charging)
+for further car charging setup details.
 
 ## Example EV and charger setup
 
