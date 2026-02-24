@@ -713,7 +713,7 @@ Edit if necessary if you have non-standard sensor names:
 If you have an AC-coupled inverter then enter the Home Assistant sensor for your PV inverter.<BR>
 If you don't have any PV panels, comment or delete this line out of `apps.yaml`.
 
-Note: these '_today' entity names must all be *energy* sensors recording electricity measured over a time period, NOT *power* sensors which measure instantaneous power.
+Note: these '_today' entity names must all be *energy* sensors recording electricity measured over a time period, NOT *power* sensors which measure instantaneous power.  They must increase during the day and not have any gaps or reduce in value (other than at midnight).
 
 The **load_power_fill_enable** feature helps to improve the accuracy of historical load data by using instantaneous power readings to fill gaps and smooth
 out load_today sensors that update infrequently (e.g., sensors that increment in kWh units may only update every hour). This preprocessing happens before
@@ -777,42 +777,6 @@ template:
 
 The template looks complex but it ensures that if any of the underlying sensors is unavailable, the load sensor returns the previous energy value, at midnight the sensor resets to zero properly,
 and during the day the sensor can only ever increase, never decrease.
-
-If you are using the LoadML feature of Predbat and have multiple inverters that share the load, you will similarly need to create a template load power sensor:
-
-```yaml
-# Home consumption power sensor, updated every 5 minutes instead of the default of every sensor state change
-- trigger:
-    - platform: time_pattern
-      minutes: "/5"
-  sensor:
-    - name: "House Load Power"
-      unique_id: "house_load_power"
-      unit_of_measurement: kW
-      device_class: power
-      state_class: measurement
-      state: >
-        {% set pv_xxx = states('sensor.givtcp_xxx_pv_power') %}
-        {% set pv_yyy = states('sensor.givtcp2_yyy_pv_power') %}
-        {% set bat_xxx = states('sensor.givtcp_xxx_battery_power') %}
-        {% set bat_yyy = states('sensor.givtcp2_yyy_battery_power') %}
-        {% set grid = states('sensor.givtcp_xxx_grid_power') %}
-        {% if pv_xxx in ['unknown','unavailable'] or
-              pv_yyy in ['unknown','unavailable'] or
-              bat_xxx in ['unknown','unavailable'] or
-              bat_yyy in ['unknown','unavailable'] or
-              grid in ['unknown','unavailable'] %}
-              {{ this.state }}
-        {% else %}
-          {{ (pv_xxx | float(0)
-            + pv_yyy | float(0)
-            + bat_xxx | float(0)
-            + bat_yyy | float(0)
-            - grid | float(0)) | round(2) }}
-        {% endif %}
-```
-
-If you have GivEnergy inverters and are using REST mode, then also set **givtcp_rest_power_ignore** to True in `apps.yaml` for both inverter so Predbat uses your custom power sensor (and not the inverter sensors via REST).
 
 ### GivEnergy Cloud Data
 
@@ -972,8 +936,6 @@ This requires at least several days of historical data with charging periods of 
 
 #### Power Data
 
-Note this are not required for normal operation, only to produce power flow data or for battery curve calculations.
-
 One entry per inverter:
 
 - **battery_power** - Current battery power in W or kW
@@ -1001,6 +963,72 @@ e.g:
     - sensor.givtcp_{geserial}_pv_power
   load_power:
     - sensor.givtcp_{geserial}_load_power
+```
+
+If you are using the LoadML feature of Predbat and have multiple inverters that share the load, you will need to create a template load power sensor in `configuration.yaml` (you can't currently configure time-pattern trigger templates in the UI):
+
+```yaml
+# Home consumption power sensor, updated every 5 minutes instead of the default of every sensor state change
+- trigger:
+    - platform: time_pattern
+      minutes: "/5"
+  sensor:
+    - name: "House Load Power"
+      unique_id: "house_load_power"
+      unit_of_measurement: kW
+      device_class: power
+      state_class: measurement
+      state: >
+        {% set pv_xxx = states('sensor.givtcp_xxx_pv_power') %}
+        {% set pv_yyy = states('sensor.givtcp2_yyy_pv_power') %}
+        {% set bat_xxx = states('sensor.givtcp_xxx_battery_power') %}
+        {% set bat_yyy = states('sensor.givtcp2_yyy_battery_power') %}
+        {% set grid = states('sensor.givtcp_xxx_grid_power') %}
+        {% if pv_xxx in ['unknown','unavailable'] or
+              pv_yyy in ['unknown','unavailable'] or
+              bat_xxx in ['unknown','unavailable'] or
+              bat_yyy in ['unknown','unavailable'] or
+              grid in ['unknown','unavailable'] %}
+              {{ this.state }}
+        {% else %}
+          {{ (pv_xxx | float(0)
+            + pv_yyy | float(0)
+            + bat_xxx | float(0)
+            + bat_yyy | float(0)
+            - grid | float(0)) | round(2) }}
+        {% endif %}
+```
+
+And configure your **load_power** entry in `apps.yaml` to use this sensor:
+
+```yaml
+  load_power:
+  - house_load_power
+  - 0
+```
+
+The dummy '0' entry is required to stop Predbat reporting an `apps.yaml` validation error from **load_power** as it is expecting one sensor per inverter.
+
+If you have multiple GivEnergy inverters and are using REST mode, then also set **givtcp_rest_power_ignore** to True in `apps.yaml` for both inverters so Predbat uses your custom power sensor (and not the inverter sensors via REST):
+
+```yaml
+  givtcp_rest_power_ignore:
+  - true
+  - true
+```
+
+If you have multiple inverters then you need to configure both battery and PV powers in `apps.yaml`, but only a single **grid_power** sensor with a dummy '0' value to prevent an `apps.yaml` validation error:
+
+```yaml
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+    - sensor.givtcp2_{geserial2}_battery_power
+  grid_power:
+    - sensor.givtcp_{geserial}_grid_power
+    - 0
+  pv_power:
+    - sensor.givtcp_{geserial}_pv_power
+    - sensor.givtcp2_{geserial2)_pv_power
 ```
 
 #### Battery SoC
