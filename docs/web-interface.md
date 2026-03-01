@@ -33,7 +33,7 @@ A number of different views of Predbat are available and you can change your vie
 
 ### Dash View
 
-The initial view is the Dash view which gives a summary of Predbat's status and mode, some easy-to-access debug options (see below), a text summary of Predbat's plan, and then all the output entities that Predbat creates.
+The initial view is the Dash view which gives a summary of Predbat's status and mode, some easy-to-access debug options (see below), a power flow diagram showing power flowing in and out of your home, a text summary of Predbat's plan, and then all the output entities that Predbat creates.
 
 ![image](images/web-interface-dash-view.png)
 
@@ -51,7 +51,7 @@ This is because GitHub does not accept .yaml file attachments.
 
 Underneath the Debug panel is the Power Flow diagram.  The Power Flow gives an 'instantaneous Power' snapshot of your PV generation, Battery charge/discharge, Grid import/export and House consumption using the **power_xx** entities defined in `apps.yaml`.
 
-Note these are a view of what is happening right now on your inverter and are not the same as the
+Note these are a snapshot view of what is happening right now on your inverter and are not the same as the
 'Energy Today' sensors in `apps.yaml` (load_today, import_today, export_today and pv_today) which give accumulated energy so far today and for the days_previous days history.
 
 Beneath that is the plan textual description panel which gives a brief summary of current battery level, forthcoming import rates, solar generation, planned charging, discharging and export activity.
@@ -98,7 +98,9 @@ The chart also shows where charging is planned under the Base and Best scenarios
 - **Rates** - Shows historic and future import and export rates along with historic hourly and today pence per kWh so you can see where you have earned or spent the most on electricity during today
 - **InDay** - Shows Predbat's predicted house load for today, the actual house load that has occurred so far today, and then Predbat's adjusted house load prediction based on the variance of today's actual load to predicted load
 - **PV** - Shows today's predicted solar generation under the PV, PV10 and PV90 scenarios alongside today's actual solar generation
-- **PV7** - Similar to the PV chart but shows actual solar generation and forecast for the last 7 days including today
+- **PV7** - Similar to the PV chart, but shows actual solar generation and forecast for the last 7 days including today
+- **Load ML** - Shows the correlation between your actual house load and the [Load ML predictions](load-ml.md), charting current prediction, the 1 hour in the future prediction, and the 8 hours future prediction
+- **LoadMLPower** - Similar to the Load ML chart, but also plots actual PV production, predicted PV production and temperature predictions.
 
 Example PV chart:
 

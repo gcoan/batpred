@@ -150,7 +150,7 @@ Training directly on months of mixed data can make it hard for the network to sp
 - Applies same time-weighted sampling to prioritize recent data
 - Preserves learned patterns while adapting to new ones
 - Same regularization techniques applied as initial training
-- Each fine-tune cycle blends the current data's feature statistics (mean/std) with the stored normalization parameters via an exponential moving average (alpha=0.1).
+- Each fine-tune cycle blends the current data's feature statistics (mean/std) with the stored normalisation parameters via an exponential moving average (alpha=0.1).
 This lets the model slowly track long-term shifts in feature distributions (e.g. seasonal load changes, new tariff rates) without sudden jumps that could destabilise existing weights.
 
 **Why Full Dataset for Fine-tuning?**
@@ -413,13 +413,13 @@ If validation MAE exceeds the threshold (default 2.0 kWh), predictions are disab
 
 ### Charts
 
-The Predbat WebUI has two charts associated with LoadML:
+The Predbat Web Console has two [Load ML charts](web-interface.md#charts-view):
 
-The LoadML chart shows the correlation between your actual load and the predictions by charting this against the prediction 1 hour in the future and 8 hours in the future.
+The LoadML chart shows the correlation between your actual house load (in blue) and the Load ML predictions, charting current Load ML prediction (in red), the 1 hour in the future prediction (orange), and the 8 hours future prediction (purple).  You can thus see how accurately Load ML is predicting your house load. Over time as Load ML learns your energy patterns and improves its prediction accuracy the red, blue, orange and purple lines should converge.
 
 <img width="1602" height="971" alt="Predbat LoadML chart showing actual household load and ML predictions 1 hour and 8 hours ahead" src="https://github.com/user-attachments/assets/731ef153-01e4-4ed1-bc5b-df1305d84f41" />
 
-The LoadMLPower chart shows a similar view as power, but also plots PV production, predicted PV production and temperature predictions.
+The LoadMLPower chart is similar to the Load ML chart, but also plots actual PV production, predicted PV production and temperature predictions.
 
 ### Check Model Status
 
@@ -430,10 +430,10 @@ ML Component: Model status: active, last trained: 2024-02-07 10:30:00
 ML Component: Validation MAE: 0.3245 kWh
 ```
 
-### Tracking Normalization Drift
+### Tracking Normalisation Drift
 
-Each time the model trains (initial fit) or fine-tunes (EMA update), it logs a normalization stats line that summarises the mean and standard deviation for each input feature group.
-You can search for Normalization stats in the logfile for this information.
+Each time the model trains (initial fit) or fine-tunes (EMA update), it logs a normalisation stats line that summarises the mean and standard deviation for each input feature group.
+You can search for Normalisation stats in the logfile for this information.
 
 Large shifts in `mean` or `std` for a group (e.g. `import_rate` after a tariff change, or `load` after a new appliance) will be visible here and confirm the EMA is tracking the drift correctly.
 
@@ -488,7 +488,7 @@ This file contains:
 - **Normalization parameters**: Feature and target mean/standard deviation (updated via EMA each fine-tune cycle to track distribution drift)
 - **Training metadata**: Epochs trained, timestamp, model version, architecture details
 
-The model is automatically loaded on Predbat restart, allowing predictions to continue immediately without retraining. The EMA-updated normalization parameters are saved and restored with the model, so drift tracking is preserved across restarts.
+The model is automatically loaded on Predbat restart, allowing predictions to continue immediately without retraining. The EMA-updated normalisation parameters are saved and restored with the model, so drift tracking is preserved across restarts.
 
 **Note**: If you update Predbat and the model architecture or version changes, the old model will be rejected and a new model will be trained from scratch. If the model becomes unstable, you can manually delete `predbat_ml_model.npz` to force retraining.
 
@@ -512,7 +512,7 @@ Future PV forecast values (negative keys) are never persisted — they are alway
 The following internal parameters are set in `load_ml_component.py` and are not currently exposed as `apps.yaml` keys, but are documented here for reference. They can be changed by editing the component directly if needed.
 
 | Parameter | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `ml_curriculum_window_days` | 7 | Size (days) of the initial training window in the first curriculum pass |
 | `ml_curriculum_step_days` | 1 | Days added to the training window for each subsequent curriculum pass |
 | `ml_curriculum_max_passes` | 4 | Maximum number of intermediate curriculum passes before the final full-data pass; `0` means unlimited |
