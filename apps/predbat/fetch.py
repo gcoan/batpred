@@ -879,7 +879,7 @@ class Fetch:
             # Completed and planned slots
             if completed:
                 self.octopus_slots += completed
-            if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[0]):
+            if planned and (not self.octopus_intelligent_ignore_unplugged or (self.num_cars >= 1 and self.car_charging_planned[0])):
                 # We only count planned slots if the car is plugged in or we are ignoring unplugged cars
                 self.octopus_slots += planned
 
@@ -997,6 +997,7 @@ class Fetch:
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
+            load_axle_slot(self, self.axle_sessions, export=False, rate_replicate=self.rate_import_replicated)
             self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.rate_import, self.rate_import_replicated)
             self.rate_import = self.apply_manual_rates(self.rate_import, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
             self.rate_scan(self.rate_import, print=True)
@@ -1417,10 +1418,12 @@ class Fetch:
             rate_low_average = dp2(rate_low_average / rate_low_count)
         return rate_low_start, rate_low_end, rate_low_average
 
-    def apply_manual_rates(self, rates, manual_items, is_import=True, rate_replicate={}):
+    def apply_manual_rates(self, rates, manual_items, is_import=True, rate_replicate=None):
         """
         Apply manual rates to the rates dictionary
         """
+        if rate_replicate is None:
+            rate_replicate = {}
         if not manual_items:
             return rates
 
@@ -1437,12 +1440,14 @@ class Fetch:
 
         return rates
 
-    def basic_rates(self, info, rtype, prev=None, rate_replicate={}):
+    def basic_rates(self, info, rtype, prev=None, rate_replicate=None):
         """
         Work out the energy rates based on user supplied time periods
         works on a 24-hour period only and then gets replicated later for future days
         """
         rates = {}
+        if rate_replicate is None:
+            rate_replicate = {}
         curr = self.currency_symbols[1]
 
         if prev:
@@ -2107,6 +2112,7 @@ class Fetch:
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
+        self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
 
@@ -2231,6 +2237,9 @@ class Fetch:
 
         # Car options
         self.car_charging_hold = self.get_arg("car_charging_hold")
+        if not self.car_energy_reported_load:
+            # If car energy is not reported as load then we should not attempt to remove car energy from the load data.
+            self.car_charging_hold = False
         self.car_charging_manual_soc = [False for c in range(max(self.num_cars, 1))]
         for car_n in range(self.num_cars):
             car_postfix = "" if car_n == 0 else "_" + str(car_n)

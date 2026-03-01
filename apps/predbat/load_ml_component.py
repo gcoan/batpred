@@ -69,6 +69,9 @@ class LoadMLComponent(ComponentBase):
         self.ml_pv_sensor = self.get_arg("pv_today", default=[], indirect=False)
         self.ml_subtract_sensors = self.get_arg("car_charging_energy", default=[], indirect=False)
         self.car_charging_hold = self.get_arg("car_charging_hold", True)
+        self.car_energy_reported_load = self.get_arg("car_energy_reported_load", True)
+        if not self.car_energy_reported_load:
+            self.car_charging_hold = False
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold", 6.0)) / 60.0
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale", 1.0)
         self.car_charging_rate = float(self.get_arg("car_charging_rate", 7.5)) / 60.0
@@ -76,7 +79,7 @@ class LoadMLComponent(ComponentBase):
         self.ml_learning_rate = 0.001
         self.ml_epochs_initial = 100
         self.ml_epochs_update = 30
-        self.ml_patience_initial = 20
+        self.ml_patience_initial = 10
         self.ml_patience_update = 10
         self.ml_min_days = 1
         self.ml_validation_threshold = 2.0
@@ -84,9 +87,15 @@ class LoadMLComponent(ComponentBase):
         self.ml_max_load_kw = 50.0
         self.ml_max_model_age_hours = 48
         self.ml_weight_decay = 0.01
+        self.ml_dropout_rate = 0.1
         self.ml_max_days_history = load_ml_max_days_history
+        # Curriculum learning: expand training window from oldest week forward
+        self.ml_curriculum_window_days = 7  # Initial window size in days
+        self.ml_curriculum_step_days = 1  # Days added per subsequent pass
+        self.ml_curriculum_max_passes = 4  # Max intermediate passes (0 = no limit)
         self.load_ml_database_days = load_ml_database_days
-        self.ml_validation_holdout_hours = 24
+        self.ml_validation_holdout_hours = 48
+        self.run_timeout = 2 * 60 * 60  # 2 hours timeout for the whole run to prevent runaway execution
 
         # Data state
         self.load_data = None
@@ -98,6 +107,7 @@ class LoadMLComponent(ComponentBase):
         self.data_ready = False
         self.data_lock = asyncio.Lock()
         self.last_data_fetch = None
+        self.load_ml_calculating = False
 
         # Model state
         self.predictor = None
@@ -124,7 +134,7 @@ class LoadMLComponent(ComponentBase):
 
     def _init_predictor(self):
         """Initialize or reinitialize the predictor."""
-        self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay)
+        self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay, dropout_rate=self.ml_dropout_rate)
 
         # Determine model save path
         if self.config_root:
@@ -152,7 +162,11 @@ class LoadMLComponent(ComponentBase):
                 # Model load failed (version mismatch, architecture change, etc.)
                 # Reinitialize predictor to ensure clean state
                 self.log("ML Component: Failed to load model, reinitializing predictor")
-                self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay)
+                self.predictor = LoadPredictor(log_func=self.log, learning_rate=self.ml_learning_rate, max_load_kw=self.ml_max_load_kw, weight_decay=self.ml_weight_decay, dropout_rate=self.ml_dropout_rate)
+
+    def is_calculating(self):
+        """Return whether the component is currently calculating predictions."""
+        return self.load_ml_calculating
 
     def get_from_incrementing(self, data, index, step, backwards=True):
         """
@@ -449,6 +463,7 @@ class LoadMLComponent(ComponentBase):
                     divide_by=1.0,
                     scale=1.0,
                 )
+
             # try to retrieve import and export rate history to detect rate-based load patterns
             import_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, import_entity, scale=1.0, increment=False, smoothing=False, pad=False)
             export_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, export_entity, scale=1.0, increment=False, smoothing=False, pad=False)
@@ -459,12 +474,12 @@ class LoadMLComponent(ComponentBase):
             if export_rates_history is None:
                 export_rates_history = {}
 
-            for minute in range(0, int(days_to_fetch * 24 * 60), PREDICT_STEP):
-                # Note we offset by 2 minutes to allow predbat to have published the rate for this period
-                value = import_rates_history.get(minute + 2, None)
+            # Merge the two dicts, with import_rates_data (from minute_data) taking priority over import_rates_history (raw import)
+            for minute in range(int(days_to_fetch * 24 * 60) - PREDICT_STEP, -PREDICT_STEP, -PREDICT_STEP):
+                value = import_rates_history.get(max(minute - 3, 0), None)
                 if value is not None and minute not in import_rates_data:
                     import_rates_data[minute] = value
-                value = export_rates_history.get(minute + 2, None)
+                value = export_rates_history.get(max(minute - 3, 0), None)
                 if value is not None and minute not in export_rates_data:
                     export_rates_data[minute] = value
 
@@ -561,7 +576,6 @@ class LoadMLComponent(ComponentBase):
         self.load_minutes_now = load_minutes_now
         self.last_data_fetch = self.now_utc
         self.data_ready = True
-        self.ml_validation_holdout_hours = 48 if self.load_data_age_days > 3 else 24
 
     def get_current_prediction(self):
         """
@@ -571,6 +585,29 @@ class LoadMLComponent(ComponentBase):
             Dict of {minute: cumulative_kwh}
         """
         return self.current_predictions
+
+    def _log_prediction_input_table(self, now_utc):
+        """
+        Log a compact table of the last 288 five-minute samples (24 hours) used as input to the prediction.
+
+        Each row shows: datetime | load(kWh) | pv(kWh) | temp(°C) | import(p/kWh) | export(p/kWh)
+        Keys in the data dicts are minutes-ago from now (0 = most recent, 5 = 5 min ago, etc.).
+        """
+        LOOKBACK_ROWS = 288  # 24 hours at 5-min resolution
+        STEP = 5
+
+        self.log("ML Component: Prediction input table (last 24h, oldest first):")
+        self.log("  {:<20} {:>10} {:>10} {:>8} {:>14} {:>14}".format("datetime", "load(kWh)", "pv(kWh)", "temp(C)", "import(p/kWh)", "export(p/kWh)"))
+
+        for i in range(LOOKBACK_ROWS - 1, -1, -1):
+            minutes_ago = i * STEP
+            row_time = now_utc - timedelta(minutes=minutes_ago)
+            load_val = self.load_data.get(minutes_ago, 0.0) if self.load_data else 0.0
+            pv_val = self.pv_data.get(minutes_ago, 0.0) if self.pv_data else 0.0
+            temp_val = self.temperature_data.get(minutes_ago, 0.0) if self.temperature_data else 0.0
+            import_val = self.import_rates_data.get(minutes_ago, 0.0) if self.import_rates_data else 0.0
+            export_val = self.export_rates_data.get(minutes_ago, 0.0) if self.export_rates_data else 0.0
+            self.log("  {:<20} {:>10.4f} {:>10.4f} {:>8.1f} {:>14.4f} {:>14.4f}".format(row_time.strftime("%Y-%m-%d %H:%M"), load_val, pv_val, temp_val, import_val, export_val))
 
     def _get_predictions(self, now_utc, midnight_utc, exog_features=None):
         """
@@ -601,6 +638,8 @@ class LoadMLComponent(ComponentBase):
         # Generate predictions using current model
         try:
             self.log("ML Component: Generating predictions load data age {:.1f} days, {} data points".format(self.load_data_age_days, len(self.load_data) if self.load_data else 0))
+            if 0:
+                self._log_prediction_input_table(now_utc)
             predictions = self.predictor.predict(self.load_data, now_utc, midnight_utc, pv_minutes=self.pv_data, temp_minutes=self.temperature_data, import_rates=self.import_rates_data, export_rates=self.export_rates_data, exog_features=exog_features)
 
             if predictions:
@@ -633,21 +672,17 @@ class LoadMLComponent(ComponentBase):
         # Determine if training is needed
         is_initial = not self.initial_training_done
 
-        # Fetch fresh load data periodically (every 15 minutes)
-        should_fetch = first or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
-        should_train = first or ((seconds % RETRAIN_INTERVAL_SECONDS) == 0)
+        # Retrain if the model is older than the retrain interval (rather than on a fixed tick)
+        retrain_age_seconds = (self.now_utc - self.last_train_time).total_seconds() if self.last_train_time else RETRAIN_INTERVAL_SECONDS
+        should_train = not first and (retrain_age_seconds >= RETRAIN_INTERVAL_SECONDS)
 
+        # Fetch fresh load data periodically (every N minutes)
+        should_fetch = first or should_train or ((seconds % PREDICTION_INTERVAL_SECONDS) == 0)
+
+        # Load database
         if not self.database_history_loaded and self.load_ml_database_days:
             async with self.data_lock:
                 await self.load_database_history()
-            should_fetch = True
-            should_train = True
-        elif is_initial:
-            # Initial run, need to fetch data and train model before we can provide predictions
-            should_train = True
-            should_fetch = True
-        elif should_train:
-            # Training requires fetching
             should_fetch = True
 
         if should_fetch:
@@ -674,19 +709,26 @@ class LoadMLComponent(ComponentBase):
             return True
 
         if is_initial:
-            self.log("ML Component: Starting initial training")
+            if should_train:
+                self.log("ML Component: Starting initial training")
+            else:
+                self.log("ML Component: Initial training is required, delaying until component has started")
+                return True
         elif should_train:
-            self.log("ML Component: Starting fine-tune training (2h interval)")
+            self.log("ML Component: Starting fine-tune training (2h interval), model age is {} hours".format(retrain_age_seconds / 3600.0))
+        elif should_fetch:
+            # If not training either then no need to print anything
+            self.log("ML Component: No training needed, model age is {} hours".format(dp2(retrain_age_seconds / 3600.0)))
 
         if should_train or should_fetch:
-            # Hold prediction_started across all NumPy-heavy work (training + predict + save)
+            # Set load_ml_calculating across all NumPy-heavy work (training + predict + save)
             # so that the plan's multiprocessing pool is never fork()ed while Numpy threads are active.
             if self.base.prediction_started:
                 self.log("ML Component: Waiting for current prediction cycle to complete before running ML work")
                 while self.base.prediction_started:
                     await asyncio.sleep(0.5)
             try:
-                self.base.prediction_started = True
+                self.load_ml_calculating = True
 
                 if should_train:
                     self.log("ML Component: Doing training...")
@@ -710,9 +752,10 @@ class LoadMLComponent(ComponentBase):
             except Exception:
                 self.log("Error: ML Component: Failed during ML work: {}".format(traceback.format_exc()))
             finally:
-                self.base.prediction_started = False
+                self.load_ml_calculating = False
         else:
             # Update model validity status when no ML work needed
+            self.load_ml_calculating = False
             self._update_model_status()
 
         self.update_success_timestamp()
@@ -866,23 +909,45 @@ class LoadMLComponent(ComponentBase):
             time_decay = min(self.ml_time_decay_days, self.load_data_age_days)
             holdout_hours = self.ml_validation_holdout_hours
             patience = self.ml_patience_initial if is_initial else self.ml_patience_update
+            max_intermediate_passes = self.ml_curriculum_max_passes
+            window_days = self.ml_curriculum_window_days
+            step_days = self.ml_curriculum_step_days
         # Lock released - event loop is free during training
 
         try:
-            # Run synchronous NumPy training in a thread-pool executor so the
-            # asyncio event loop stays responsive throughout.
-            val_mae = self.predictor.train(
+            if is_initial:
+                # Curriculum: progressively expand the training window from oldest week
+                # forward so the model learns gradually from historical structure.
+                val_mae = self.predictor.train_curriculum(
+                    load_data_snap,
+                    now_utc_snap,
+                    pv_minutes=pv_data_snap,
+                    temp_minutes=temp_data_snap,
+                    import_rates=import_rates_snap,
+                    export_rates=export_rates_snap,
+                    epochs=epochs,
+                    time_decay_days=time_decay,
+                    validation_holdout_hours=holdout_hours,
+                    patience=patience,
+                    curriculum_window_days=window_days,
+                    curriculum_step_days=5,
+                    max_intermediate_passes=8,
+                )
+            # Even if initial was done we need to do one fine tuned curriculum pass too.
+            val_mae = self.predictor.train_curriculum(
                 load_data_snap,
                 now_utc_snap,
                 pv_minutes=pv_data_snap,
                 temp_minutes=temp_data_snap,
                 import_rates=import_rates_snap,
                 export_rates=export_rates_snap,
-                is_initial=is_initial,
                 epochs=epochs,
                 time_decay_days=time_decay,
                 validation_holdout_hours=holdout_hours,
                 patience=patience,
+                curriculum_window_days=window_days,
+                curriculum_step_days=step_days,
+                max_intermediate_passes=max_intermediate_passes,
             )
 
             if val_mae is not None:
@@ -986,6 +1051,7 @@ class LoadMLComponent(ComponentBase):
                 "power_today_h1": dp2(power_today_h1),
                 "power_today_h8": dp2(power_today_h8),
                 "mae_kwh": round(self.predictor.validation_mae, 4) if self.predictor and self.predictor.validation_mae else None,
+                "bias_kwh": round(self.predictor.validation_bias, 4) if self.predictor and self.predictor.validation_bias is not None else None,
                 "last_trained": self.last_train_time.isoformat() if self.last_train_time else None,
                 "model_age_hours": round(model_age_hours, 1) if model_age_hours else None,
                 "training_days": self.load_data_age_days,

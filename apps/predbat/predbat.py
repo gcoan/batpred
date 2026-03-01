@@ -36,7 +36,7 @@ import pytz
 import requests
 import asyncio
 
-THIS_VERSION = "v8.33.6"
+THIS_VERSION = "v8.33.10"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "const.py", "hass.py", "config.py", "prediction.py", "gecloud.py", "utils.py", "inverter.py", "ha.py", "download.py", "web.py", "web_helper.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py", "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py", "db_manager.py", "db_engine.py", "plugin_system.py", "ohme.py", "components.py", "fox.py", "carbon.py", "temperature.py", "web_mcp.py", "component_base.py", "axle.py", "solax.py", "solis.py", "unit_test.py", "load_ml_component.py", "load_predictor.py"]
@@ -565,6 +565,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
         self.battery_rate_min = 0
         self.battery_rate_max_scaling = 1.0
         self.battery_rate_max_scaling_discharge = 1.0
+        self.car_energy_reported_load = False
         self.charge_rate_now = 0
         self.discharge_rate_now = 0
         self.car_charging_hold = False
@@ -1072,6 +1073,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
 
         files = predbat_update_download(version)
         if files:
+            # Notify before killing threads so the WebSocket is still healthy
+            if self.get_arg("set_system_notify"):
+                self.call_notify("Predbat: update to: {}".format(version))
+
             # Kill the current threads
             self.log("Kill current threads before update")
             self.stop_thread = True
@@ -1084,10 +1089,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Fetch, Plan, Execute, Outpu
                     self.log("Warn: Failed to close thread pool: {}".format(e))
                     self.log("Warn: " + traceback.format_exc())
                 self.pool = None
-
-            # Notify that we are about to update
-            if self.get_arg("set_system_notify"):
-                self.call_notify("Predbat: update to: {}".format(version))
 
             # Perform the update
             self.log("Perform the update.....")
