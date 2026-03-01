@@ -511,9 +511,9 @@ The *planned* attribute of the binary_sensor contains details of all planned car
 Note that the start and ends are expressed in 'MM-DD HH:MM:SS" format, use the template sensor below if you want to convert these to full date format, e.g. to display on an Apex chart
 - predbat.car_charging_start - The time that car charging is planned to start at, in HH:MM:SS format
 - predbat.car_soc_best - Predicted charge level of your car in the best plan at the end of the plan using the proposed car charging SoC% and charge window. Can also be charted
-- predbat.cost_today_car - Current cost in pence so far today of charging all cars, with attribute of the projected future car charging costs and slots
+- predbat.cost_today_car - Current cost in pence so far today of charging all cars, with attribute of the projected future car charging costs and slots. Predbat calculates car charging cost based upon your energy rates and the [car_charging_energy](car-charging.md#filtering-car-charging-energy-from-house-load) sensors set in `apps.yaml`
 - predbat.cost_total_car - A running total in pence of the below cost_yesterday_car sensor, with attribute of the total in pounds
-- predbat.cost_yesterday_car - A sensor that gives the total energy costs in pence of charging all cars for yesterday (00:00-23:59 on the previous day)
+- predbat.cost_yesterday_car - A sensor that gives the total energy costs in pence of charging all cars for yesterday (00:00-23:59 on the previous day). The sensor is calculated from import rates and [car_charging_energy](car-charging.md#filtering-car-charging-energy-from-house-load) as per predbat.cost_today_car
 
 See [Example Automation to separate car charging costs](car-charging.md#example-separating-car-charging-costs-for-multiple-cars) if you have multiple EV's and want to separate predbat.cost_today_car into costs per car.
 

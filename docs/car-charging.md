@@ -40,7 +40,7 @@ high battery charge levels when the car was charged previously (e.g. last week).
         - Automatically set **switch.predbat_car_charging_from_battery** to On in the model (the battery cannot discharge into the car anyway as it is on a separate circuit).
         - Model that any export from the battery/PV may flow into the car rather than the grid, and so conservatively not credit that energy with export income.
 
-- **switch.predbat_car_charging_hold** - A switch that when turned on (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. This switch is automatically overridden to Off when **switch.predbat_car_energy_reported_load** is Off, since the car load is not in the house load data.
+- **switch.predbat_car_charging_hold** - A switch that when turned On (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. This switch is automatically overridden to Off when **switch.predbat_car_energy_reported_load** is Off, since the car load is not in the house load data.
 
 If you are getting [erroneous house load predictions in your plan](faq.md#why-is-my-house-load-lower-than-expected-or-zero) then check this setting and **car_charging_energy** or **input_number.predbat_car_charging_threshold** are set correctly.
 
@@ -207,18 +207,18 @@ Again, if you are using the Octopus Energy direct method for Predbat then these 
 - You can configure **car_charging_now** in `apps.yaml` to point a Home Assistant sensor that indicates that the car is currently charging as a workaround to indicate your car is charging, but the Intelligent API hasn't reported it.
 
 - The switch **switch.predbat_octopus_intelligent_consider_full** (*expert mode*)
-(default is Off) when turned on will cause Predbat to predict when your car battery is full and assume no further charging will occur.
+(default is Off) when turned On will cause Predbat to predict when your car battery is full and assume no further charging will occur.
 This can be useful if Octopus does not know your car battery's state of charge but you have a sensor setup in Predbat (**car_charging_soc**) which does know the current charge level.
 Predbat will still assume all Octopus charging slots are low rates even if some are not used by your car.
 
-- The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (*expert mode*) (default value is off) can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
+- The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (*expert mode*) (default value is Off) can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
 This will only work correctly if **car_charging_planned** is set correctly in `apps.yaml` to detect your car being plugged in
 
 - Let the Octopus app control when your car charges.
 
 ### Predbat-led charging
 
-Here Predbat plans and can initiate the car charging based on the upcoming low import rate slots
+Here Predbat plans and can initiate the car charging based upon the upcoming low import rate slots
 
 - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly in `apps.yaml` to point to the appropriate sensors from your EV (see [Car charging config in apps.yaml](#configure-appsyaml-for-your-car-charging))
 
@@ -240,9 +240,9 @@ NB2: If you have **car_charging_soc** set and working for your car SoC sensor in
 
 - Set **select.predbat_car_charging_plan_time** to the time you want the car charging to be completed by
 
-- Turn on **switch.predbat_car_charging_plan_smart** if you want to use the cheapest slots only. When disabled (turned off) all low-rate slots will be used in time order.
+- Turn On **switch.predbat_car_charging_plan_smart** if you want to use the cheapest slots only. When disabled (turned Off) all low-rate slots will be used in time order.
 Low-rate slots are time periods where the import rate is below the threshold determined by **input_number.predbat_rate_low_threshold** (*expert mode*).
-By default this threshold is calculated automatically based on future import rates - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options) for details on configuring this threshold.
+By default this threshold is calculated automatically based upon future import rates - see [Battery margins and metrics options](customisation.md#battery-margins-and-metrics-options) for details of configuring this threshold.
 
 - You can set **input_number.predbat_car_charging_plan_max_price** if you want to set a maximum price in pence per kWh to charge your car (e.g. 10p).
 If you set this to zero, this feature is disabled, and all low-rate slots will be used.
@@ -250,14 +250,14 @@ This may mean you need to use expert mode and change your low-rate threshold (**
 
 - *WARNING:* Do not set **car_charging_now** in `apps.yaml` or you will create a circular dependency.
 
-- Predbat will set **binary_sensor.predbat_car_charging_slot** when it determines the car can be charged; you will need to write a Home Assistant automation based on this sensor to control when your car charges.
+- Predbat will set **binary_sensor.predbat_car_charging_slot** when it determines the car can be charged; you will need to write a Home Assistant automation based upon this sensor to control when your car charges.
 
 A sample automation to start/stop car charging using a Zappi car charger and the [MyEnergi Zappi integration](https://github.com/CJNE/ha-myenergi) is as follows,
 this should be adapted for your charger type and how it controls starting/stopping car charging:
 
 ```yaml
 alias: Car charging
-description: "Start/stop car charging based on Predbat determined slots"
+description: "Start/stop car charging based upon Predbat determined slots"
 triggers:
   - trigger: state
     entity_id:
@@ -304,7 +304,7 @@ e.g. you are using Intelligent Octopus or you use the car slots in Predbat to co
 - **input_number.predbat_car_charging_loss** gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
 A good setting is 0.08 which is 8%.
 
-- **switch.predbat_metric_dynamic_load_adjust** (default `false`) - If turned off then Predbat won't export during times the car is planned to charge even if the car is not charging.
+- **switch.predbat_metric_dynamic_load_adjust** (default `false`) - If turned Off then Predbat won't export during times the car is planned to charge even if the car is not charging.
 
 - See [Car charging filtering](#filtering-car-charging-energy-from-house-load) and [Planned car charging](#planned-car-charging)
 for further car charging setup details.
@@ -471,7 +471,7 @@ The following solution will accumulate individual charging costs for each car.
 
   Predbat accumulates cost in pence/cents, etc so the Max value should be big enough to hold the maximum car charging cost per day (e.g. £10/$10/€10).
 
-- Create an automation that triggers when **predbat.cost_today_car** changes value. Then, based on which car is connected (sensor.car1_connected or sensor.car2_connected in this case), delta of predbat_cost to the appropriate car cost today sensor:
+- Create an automation that triggers when **predbat.cost_today_car** changes value. Then, based upon which car is connected (sensor.car1_connected or sensor.car2_connected in this case), delta of predbat_cost to the appropriate car cost today sensor:
 
     ```yaml
     alias: Allocate EV Charging Cost
