@@ -3,7 +3,15 @@
 As a bare minimum, a HA-controllable smart plug with a granny charger could be used,
 but do consider there could be an electrical spike to the car if the smart plug is turned off when the car is charging. A proper car charger and HA integration are preferable.
 
-You will first need to have installed the appropriate Home Assistant integration for your car charger.
+You will first need to have installed the appropriate Home Assistant integration for your car charger.  Details of existing Car charging configurations can be found in the [Devices](devices.md) section.
+
+If you have the Intelligent Octopus tariff, have completed enrollment of your car/charger to Intelligent Octopus (requires a compatible charger or car), and want to take advantage of Octopus planning your charging via the Octopus app, then Predbat will obtain the Octopus charging information through the [Octopus Energy integration](energy-rates.md#octopus-energy-home-assistant-integration) in Home Assistant or the [Octopus direct connection](energy-rates.md#octopus-energy-direct). Predbat will plan your home battery charging around the Intelligent Octopus slots.
+
+This is referred to as 'Octopus led' charging in this documentation.
+
+Alternatively, Predbat can plan your car charging based upon your energy rates, this is known as 'Predbat led' charging'.
+
+There are different configuration options that have to be set in Predbat depending upon whether you are using Octopus-led or Predbat-led car charging.  Note that if you are on the Intelligent Octopus tariff then you can still have Predbat plan your car charging, not Octopus, in which case you need to follow the Predbat-led configuration steps.
 
 ## Configure apps.yaml for your car charging
 
@@ -83,20 +91,7 @@ If you do not have an EV charger then ensure you set **switch.predbat_car_chargi
 
 These features allow Predbat to know when you plan to charge your car.
 
-If you have an Intelligent Octopus tariff then planning of charging is done via the Octopus app and Predbat obtains this information through the Octopus Energy integration in Home Assistant.
-
-- **switch.predbat_octopus_intelligent_charging** - When this Home Assistant switch is enabled, Predbat will plan charging around the Intelligent Octopus slots, taking it into account for battery load and generating the slot information
-
-The following `apps.yaml` configuration items are pre-defined with regular expressions to point to appropriate sensors in the Octopus Energy integration. You should not normally need to change these if you have the Octopus Intelligent tariff:
-
-- **octopus_intelligent_slot** - Points to the Octopus Energy integration 'intelligent dispatching' sensor that indicates
-whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
-
-- **octopus_ready_time** - Points to the Octopus Energy integration sensor that details when the car charging will be completed.<BR>
-*Note:* the Octopus Integration now provides [Octopus Intelligent target time](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/#target-time-time) in two formats, either a 'select' entity or a 'time' entity.
-Predbat uses the time entity (time.octopus_energy_{{DEVICE_ID}}_intelligent_target_time) which is disabled by default, so you will need to enable the time entity and disable the matching select entity.
-
-- **octopus_charge_limit** - Points to the Octopus Energy integration sensor that provides the car charging limit.
+If you are on the Octopus Intelligent Tariff set the following entries in `apps.yaml`:
 
 - **octopus_slot_low_rate** - Default is `true`, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If `false` the existing rates only will be used which is only suitable for tariffs other than IOG.
 
@@ -104,7 +99,26 @@ Predbat uses the time entity (time.octopus_energy_{{DEVICE_ID}}_intelligent_targ
 Octopus Intelligent users maybe from March 2026 limited to 6 hours of cheap charging per day. Slots beyond this limit will use standard rates.
 Its recommended you set this to 12 (for 6 hours) once Octopus enforce this Octopus Intelligent limit.
 
-If you don't use Intelligent Octopus then the above Octopus Intelligent configuration lines in `apps.yaml` can be commented out or deleted, and there are a number of other `apps.yaml` configuration items that should be set:
+If you are using Octopus-led charging with the [Octopus Energy integration](energy-rates.md#octopus-energy-home-assistant-integration):
+
+The following `apps.yaml` configuration items are pre-defined with regular expressions to point to appropriate sensors in the Octopus Energy integration. You should not normally need to change these if you have the Octopus Intelligent tariff:
+
+- **octopus_intelligent_slot** is pre-configured with a regular expression to point to the 'Intelligent dispatching' sensor in the Octopus Energy integration that indicates whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.
+You should not need to change this, but it is worth checking the [Predbat logfile](output-data.md#predbat-logfile) to confirm that it has found your EV charger details.
+
+- **octopus_ready_time** - Points to the Octopus Energy integration sensor that details when the car charging will be completed.<BR>
+*Note:* the Octopus Integration now provides [Octopus Intelligent target time](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/#target-time-time) in two formats, either a 'select' entity or a 'time' entity.
+Predbat uses the time entity (time.octopus_energy_{{DEVICE_ID}}_intelligent_target_time) which is disabled by default, so you will need to enable the time entity and disable the matching select entity.
+
+- **octopus_charge_limit** - Points to the Octopus Energy integration sensor that provides the car charging limit you want the car to charge to.
+
+If you are using Octopus-led charging with the [Octopus direct connection](energy-rates.md#octopus-energy-direct) method:
+
+- Predbat gets its Octopus charging slot information direct from the Octopus API, so comment out or delete octopus_intelligent_slot, octopus_ready_time and octopus_charge_limit from `apps.yaml`.
+
+If you are using Predbat-led charging:
+
+- Predbat gets its Octopus charging slot information direct from the Octopus API, so comment out or delete octopus_intelligent_slot, octopus_ready_time and octopus_charge_limit from `apps.yaml`.
 
 - **car_charging_planned** - Optional, can be set to a Home Assistant sensor (e.g. from your car charger integration)
 which lets Predbat know the car is plugged in and planned to charge during low-rate slots.
@@ -119,8 +133,7 @@ Customise for your car charger sensor if it sets sensor values that are not in t
 - **car_charging_now** - For some cases finding details of planned car charging is difficult.<BR>
 The car_charging_now configuration item can be set to point to a Home Assistant sensor that tells you that the car is currently charging.
 Predbat will then assume this slot is used for charging regardless of the plan.<BR>
-If Octopus Intelligent Charging is enabled and car_charging_now indicates the car is charging then Predbat will also assume that this is a
-low rate slot for the car/house (and might therefore start charging the battery), otherwise electricity import rates are taken from the normal rate data.<BR>
+If Octopus Intelligent Charging is enabled and car_charging_now indicates the car is charging then Predbat will also assume that this is a low rate slot for the car/house (and might therefore start charging the battery), otherwise electricity import rates are taken from the normal rate data.<BR>
 WARNING: Some cars will briefly start charging as soon as they are plugged in, which Predbat will detect and assume that this is a low rate slot even when it isn't.
 It is therefore recommended that you do NOT set car_charging_now unless you have problems with the Octopus Intelligent slots, and car_charging_now should be commented out in `apps.yaml`.
 
@@ -128,7 +141,7 @@ It is therefore recommended that you do NOT set car_charging_now unless you have
 
 - **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging. Useful if you have a sensor for your car charger that isn't binary.
 
-To make Predbat planned car charging more accurate, configure the following items in `apps.yaml`:
+To make Predbat-led car charging more accurate, additionally you can configure the following items in `apps.yaml`:
 
 - **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh which *must* be entered with one decimal place, e.g. 50.0.
 If not set, Predbat defaults to 100.0kWh. This will be used to predict when to stop car charging.
@@ -155,7 +168,7 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 
 - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars)
 
-- If you have Intelligent Octopus then Car 0 will be managed by the Octopus Energy integration, if it's enabled.
+- If you have Intelligent Octopus then Car 0 will be managed by the Octopus Energy integration/Octopus Direct connection, if it's enabled.
 
 - Each car will have its own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
@@ -182,18 +195,9 @@ There are two ways that Predbat can plan the slots for charging your car:
 
 ### Octopus-led charging
 
-- If you have the Intelligent Octopus import tariff, have completed enrollment of your car/charger to Intelligent Octopus (requires a compatible charger or car),
-and you have installed the Octopus Energy integration - in which case Predbat will use the car charging slots allocated by Octopus Energy in battery prediction.
-The [Octopus Energy integration supports Octopus Intelligent](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/),
-and through that, Predbat gets most of the information it needs.
+- **switch.predbat_octopus_intelligent_charging** - Turn this Home Assistant switch to On and Predbat will plan charging around the Intelligent Octopus slots, taking it into account for battery load and generating the slot information
 
-- **octopus_intelligent_slot** in `apps.yaml` is pre-configured with a regular expression to point to the Intelligent Slot sensor in the Octopus Energy integration.
-You should not need to change this, but it is worth checking the [Predbat logfile](output-data.md#predbat-logfile) to confirm that it has found your EV charger details.<BR>
-If you are using the [Octopus Energy direct](energy-rates.md#octopus-energy-direct) method of Predbat directly connecting to your Octopus account then this configuration line is not required and should be commented out of `apps.yaml`.
-
-- Set **switch.predbat_octopus_intelligent_charging** to On
-
-- You should set the car's current SoC sensor, **car_charging_soc** in `apps.yaml` to point to a Home Assistant sensor that specifies the car's current % charge level to have accurate results.
+- You should set the car's current SoC sensor, **car_charging_soc** in `apps.yaml` to point to a Home Assistant sensor that specifies the car's current % charge level to have accurate detection of when the car charging will be complete.
 This should normally be a sensor provided by your car charger.
 If you don't have this available for your charger then Predbat will assume the car's current charge level is 0%.
 
