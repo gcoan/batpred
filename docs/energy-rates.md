@@ -505,13 +505,15 @@ Predbat can also track Carbon intensity by linking it to an integration which pr
 
 ### UK Grid Carbon intensity
 
-The National Grid provides this data, you can have Predbat fetch it directly by entering your postcode:
+The National Grid provides an API to access this; you can have Predbat fetch it directly by entering your postcode in `apps.yaml`:
 
 ```yaml
   # Carbon Intensity data from National grid
   carbon_postcode: 'SW1 5NA'
   carbon_automatic: true
 ```
+
+NB: The postcode must be formatted as just the outward code (e.g. 'SW1') or a full postcode including a single space between the outward and inward codes (e.g. 'SW1 5NA'). The National Grid API that Predbat uses only requires the outward code part, and if it doesn't recognise your postcode, try another nearby postcode.
 
 This direct connection will also set **sensor.predbat_carbon** with the current carbon data.
 
@@ -523,9 +525,9 @@ Predbat can also [optimise your grid charging based on the Carbon footprint](cus
 
 ### UK Grid Carbon intensity (HA Integration)
 
-If you prefer you can instead install this integration: <https://github.com/jfparis/sensor.carbon_intensity_uk>. There have been reports that this integration might not be working any more.
+If you prefer you can instead install the Carbon Intensity integration <https://github.com/jfparis/sensor.carbon_intensity_uk>. There have been reports that this integration might not be working any more.
 
-Once it is active update apps.yaml to link Predbat to the Sensor (if it's not already in your template):
+Once the integration is active, update `apps.yaml` to link Predbat to the Carbon intensity sensor:
 
 ```yaml
   # Carbon Intensity data from National grid
