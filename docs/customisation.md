@@ -485,7 +485,7 @@ Higher values will generate plans with more solar diversion while lower values w
 A value of 0 means all diverted energy should be ignored in planning (assumed to be zero value).
 
 - **switch.predbat_iboost_energy_subtract** When turned On (the default) energy reported by the **iboost_energy_today** sensor configured in `apps.yaml` will be subtracted from your historical load data to improve the accuracy of predictions.
-If you are using PredAI you will also need to subtract this data inside PredAI configuration.
+If you are using PredAI you will also need to subtract this data inside the PredAI configuration.
 
 Different boost modes can be selected:
 

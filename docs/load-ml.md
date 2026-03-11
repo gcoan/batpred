@@ -239,11 +239,11 @@ This means:
 - Setting `load_ml_database_days` to 0 disables the database entirely — training only ever uses what entity history HA currently has
 - The age reported in logs and the `training_days` attribute reflects the actual depth of the accumulated dataset, computed from the furthest key present in memory
 
-For best results:
+Before enabling load_ml_source:
 
-- Ensure you have a least a weeks worth of data before enabling load_ml_source.
-- Make sure you do not have PredAI enabled at the same time
-- Disable in day adjustment (switch.predbat_calculate_inday_adjustment) as the AI model will do that for you.
+- Ensure Load ML has been training itself and running with a least a weeks worth of data
+- Make sure you do not have [PredAI](https://github.com/springfall2008/predai) enabled at the same time
+- Disable in day adjustment (**switch.predbat_calculate_inday_adjustment**) as the Load ML model will do that for you and otherwise Predbat will double-count in-day load.
 
 ### Recommended: Enable Temperature Predictions
 
@@ -338,7 +338,7 @@ Once trained, the component publishes predictions to:
 
 - `sensor.predbat_load_ml_forecast` - Contains 48-hour prediction in `results` attribute
 
-You can visualize these predictions in the Predbat web interface or by creating charts in Home Assistant.
+You can visualize these predictions in the [Chart view](web-interface.md#charts-view) of the Predbat web interface, or by creating [Apex charts](creating-charts.md) in Home Assistant.
 
 ## Understanding the Model
 
