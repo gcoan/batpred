@@ -703,7 +703,7 @@ The solar sensor attributes include:
 
 ## Dummy inverter sensors
 
-Predbat can now manage different inverter types, some of which don't have all the same control characteristics. Predbat might create dummy entities for control aspects that your inverter doesn't natively support.
+Predbat can now manage different inverter types, some of which don't have all the same control characteristics. Predbat might [create dummy entities for control aspects](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) that your inverter doesn't natively support.
 
 For example, for each Gen 1 hybrid inverter (N=0, 1, etc if there are multiple inverters), Predbat creates the following dummy inverter entities:
 
