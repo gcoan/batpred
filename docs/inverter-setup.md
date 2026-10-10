@@ -1564,11 +1564,11 @@ actions:
       - automation.luxpower_freeze_charge
       - automation.luxpower_freeze_charge_predbat_override
       - automation.luxpower_freeze_charge_watchdog
-    
+
 - action: input_boolean.turn_off
   target:
     entity_id: input_boolean.freeze_charge_guard
-  
+
 - choose:
   - conditions:
       - condition: template
@@ -1579,12 +1579,12 @@ actions:
       - action: switch.turn_on
         target:
           entity_id: switch.lux_ac_charge_enable
-        
+
   default:
     - action: switch.turn_off
       target:
         entity_id: switch.lux_ac_charge_enable
-      
+
 - choose:
   - conditions:
     - condition: template
@@ -1609,11 +1609,11 @@ actions:
           value: >-
             {{ states('number.lux_on_grid_discharge_cut_off_soc') | int(0)
             }}
-        
+
       - action: automation.turn_off
         target:
           entity_id: automation.luxpower_freeze_charge_exit
-            
+
 mode: single
 ```
 
