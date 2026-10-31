@@ -146,6 +146,50 @@ def export_target_percent_or_zero(export_limit):
     return 0 if target is None else target
 
 
+def split_change_by_rate(change_kwh, members):
+    """Split a fleet-wide change in stored energy across the inverters by their rate share, within each one's room.
+
+    Each inverter is given its share of the change in proportion to its charge rate (or discharge rate when
+    exporting), so that they all finish together. An inverter that would go past its own limit (its capacity when
+    charging, its reserve when exporting) is held at that limit and the energy it could not take is shared out
+    among the others in the same proportion, repeating until nothing is left or every inverter is at its limit.
+    When no inverter reaches a limit this is exactly the plain rate split.
+
+    This is deliberately not a split by capacity that tries to end the inverters level: an inverter that is
+    ahead of the fleet's SoC % but still has room keeps its share, which is what stops the premature charge
+    pause described in #1484 (fixed by #1492).
+
+    Parameters:
+    - change_kwh (float): the fleet change in stored energy, positive to charge and negative to export
+    - members (list): one (soc_kw, soc_max, reserve, rate) tuple per inverter, where rate is that inverter's
+      charge rate when charging or discharge rate when exporting
+
+    Returns:
+    - list: the target kWh for each inverter, in the same order. If the change is more than the inverters
+      have room for, each is taken to its limit.
+    """
+    direction = 1 if change_kwh >= 0 else -1
+    room = [max(soc_max - soc_kw, 0.0) if direction > 0 else max(soc_kw - reserve, 0.0) for soc_kw, soc_max, reserve, _rate in members]
+    moved = [0.0] * len(members)
+    open_members = list(range(len(members)))
+    remaining = abs(change_kwh)
+    while open_members and remaining > 1e-9:
+        total_rate = sum(members[index][3] for index in open_members)
+        if total_rate <= 0:
+            break
+        shares = {index: remaining * members[index][3] / total_rate for index in open_members}
+        full = [index for index in open_members if shares[index] > room[index] - moved[index]]
+        if not full:
+            for index in open_members:
+                moved[index] += shares[index]
+            break
+        for index in full:
+            remaining -= room[index] - moved[index]
+            moved[index] = room[index]
+            open_members.remove(index)
+    return [member[0] + direction * amount for member, amount in zip(members, moved)]
+
+
 class Execute:
     """Execution mixin for applying optimised plans to physical inverters.
 
@@ -1216,7 +1260,8 @@ class Execute:
     def adjust_battery_target_multi(self, inverter, soc, is_charging, is_exporting, isFreezeCharge=False, check=False):
         """
         Adjust target SoC based on the current SoC of all the inverters accounting for their
-        charge rates and battery capacities
+        charge rates (discharge rates when exporting) and battery capacities. What an inverter has no
+        room for is given to the others, see split_change_by_rate()
         """
         target_kwh = dp2(self.soc_max * (soc / 100.0))
         soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
@@ -1235,8 +1280,16 @@ class Execute:
                 self.log("Inverter {} adjust target SoC for export to {}% based on requested all inverter SoC {}%".format(inverter.id, dp0(new_soc_percent), soc))
         else:
             add_kwh = target_kwh - self.soc_kw
-            add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
-            new_soc_kwh = max(min(inverter.soc_kw + add_this, inverter.soc_max), inverter.reserve)
+            # Split the change by rate share so the inverters finish together, giving what one has no room for to the others.
+            # The share is by charge rate when charging but by DISCHARGE rate when exporting. It used the charge rate for both,
+            # which misjudged any inverter whose discharge rate differs from its charge rate (inverter_limit_discharge, or a
+            # different discharge rating), and gave an inverter limited to a discharge rate of 0 a share of the export it
+            # could not deliver.
+            exporting = add_kwh < 0
+            members = [(inv.soc_kw, inv.soc_max, inv.reserve, inv.battery_rate_max_discharge if exporting else inv.battery_rate_max_charge) for inv in self.inverters]
+            new_soc_kwh = split_change_by_rate(add_kwh, members)[self.inverters.index(inverter)]
+            new_soc_kwh = max(min(new_soc_kwh, inverter.soc_max), inverter.reserve)
+            add_this = new_soc_kwh - inverter.soc_kw
             new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
             if not check:
                 self.log(

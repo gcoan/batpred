@@ -18,7 +18,9 @@ to change them deliberately, and so the size of each fault is visible in the dif
 fixed. Where that is the case the expectation says so and names the finding.
 """
 
+from execute import split_change_by_rate
 from tests.fleet_rig import FLEET_FIXTURES, fleet_balance_power, fleet_spread, setup_fleet, split_fleet_target
+from utils import dp3
 
 # What each fixture aggregates to: (fleet soc_max kWh, per-inverter soc_max, per-inverter rate W).
 # Guards the rig itself - a fleet whose members quietly collapse to the same capacity or the same
@@ -28,16 +30,25 @@ EXPECTED_FLEETS = {
     "issue_830": (14.7, [9.5, 5.2], [2600, 2600]),
     "issue_4842": (30.11, [12.4, 9.52, 8.19], [2600, 2600, 3000]),
     "issue_3172": (28.5, [19.0, 9.5], [3000, 3000]),
+    # battery_scaling 0.8 on the 5.2 kWh battery: 5.2 x 0.8 = 4.16 kWh usable
+    "issue_830_scaled": (13.66, [9.5, 4.16], [2600, 2600]),
+    "aio_hybrid": (32.5, [13.5, 19.0], [6000, 4000]),
 }
 
 # Target split from a perfectly balanced fleet at 50%: (fleet target %, per-inverter target %,
 # spread in points, fleet % the split really reaches).
 #
-# Only matched_pair is correct. On every mixed fleet the split is by charge-rate share and never
-# reads soc_max (F1), so it opens a spread from a balanced start, and once the smallest battery
-# saturates the surplus is not redistributed and the fleet lands short of the target the plan was
-# costed against (F2). A capacity-proportional split would give every inverter the fleet target
-# exactly, zero spread, and reach the target on every row.
+# The fleet's change is split by charge-rate share so the inverters finish together (#1492, #1484), so
+# on a mixed fleet it opens a spread from a balanced start, and that is deliberate. Balancing the
+# inverters is not the aim of the split: they do not share load evenly, so a level SoC does not last,
+# and a split that levels them (the same % on each) holds back an inverter that is ahead while another
+# catches up, which is the premature pause #1484 describes.
+#
+# Charge that an inverter has no room for is given to the others (#4856 F2). Before that, once the smallest
+# battery saturated the surplus was lost and the fleet landed short of the target the plan was costed
+# against. Only the 90% and 95% rows of the mixed fleets change, to the targets below; for the record the
+# rows were: issue_830 90 [81,100] reaching 88, 95 [85,100] reaching 90; issue_4842 90 [81,90,100]
+# reaching 89, 95 [85,95,100] reaching 92; issue_3172 90 [80,100] reaching 87, 95 [84,100] reaching 89.
 EXPECTED_TARGET_SPLIT = {
     "matched_pair": [
         (60, [60, 60], 0, 60),
@@ -51,24 +62,24 @@ EXPECTED_TARGET_SPLIT = {
         (60, [58, 64], 6, 60),
         (70, [65, 78], 13, 70),
         (80, [73, 92], 19, 80),
-        (90, [81, 100], 19, 88),  # F2: asked for 90%, reaches 88%
-        (95, [85, 100], 15, 90),  # F2: asked for 95%, reaches 90%
+        (90, [85, 100], 15, 90),
+        (95, [92, 100], 8, 95),
         (100, [100.0, 100.0], 0.0, 100),
     ],
     "issue_4842": [
         (60, [58, 60, 63], 5, 60),
         (70, [65, 70, 77], 12, 70),
         (80, [73, 80, 90], 17, 80),
-        (90, [81, 90, 100], 19, 89),  # F2
-        (95, [85, 95, 100], 15, 92),  # F2
+        (90, [82, 92, 100], 18, 90),
+        (95, [88, 100, 100], 12, 95),
         (100, [100.0, 100.0, 100.0], 0.0, 100),
     ],
     "issue_3172": [
         (60, [58, 65], 7, 60),
         (70, [65, 80], 15, 70),
         (80, [73, 95], 22, 80),
-        (90, [80, 100], 20, 87),  # F2
-        (95, [84, 100], 16, 89),  # F2
+        (90, [85, 100], 15, 90),
+        (95, [92, 100], 8, 95),
         (100, [100.0, 100.0], 0.0, 100),
     ],
 }
@@ -163,8 +174,8 @@ def test_fleet_fixtures(my_predbat):
 
 def test_target_split(my_predbat):
     """
-    Splitting a fleet SoC target across a mixed fleet opens a spread from a balanced start and
-    undershoots the target once the smallest battery saturates (F1, F2).
+    Splitting a fleet SoC target across a mixed fleet is by rate share, so the inverters finish together,
+    and charge that an inverter has no room for goes to the others so the fleet reaches the target (F2).
     """
     print("Test: fleet target split across heterogeneous fleets")
     failed = False
@@ -175,6 +186,127 @@ def test_target_split(my_predbat):
             failed |= report(targets != want_targets, "{} at {}%: split {} should be {}".format(name, target, targets, want_targets))
             failed |= report(spread != want_spread, "{} at {}%: spread {} should be {}".format(name, target, spread, want_spread))
             failed |= report(reached != want_reached, "{} at {}%: fleet reaches {}% should be {}%".format(name, target, reached, want_reached))
+    return failed
+
+
+def test_target_split_saturation(my_predbat):
+    """
+    Charge that an inverter has no room for is given to the others, so the fleet still reaches
+    its target (F2), whether the limit is a full battery or one that has nothing left to give.
+    """
+    print("Test: fleet target split when an inverter has no room")
+    failed = False
+
+    # 9.5 + 5.2 kWh at 45% / 75% asked for 80%: the small battery's share is more than it has room for, so it is
+    # filled and the large one takes the remainder. A split that levels them would send 80% to both
+    setup_fleet(my_predbat, "issue_830", soc=[45, 75])
+    targets, _spread, reached = split_fleet_target(my_predbat, 80)
+    failed |= report(targets != [69, 100] or reached != 80, "issue_830 from 45/75 at 80%: expected [69, 100] reaching 80%, got {} reaching {}%".format(targets, reached))
+
+    # Two equal batteries at 50% and 100% asked for 80%: only one has any room, so it takes all the change and the full
+    # one stays at 100% (it does not discharge into the other)
+    setup_fleet(my_predbat, "matched_pair", soc=[50, 100])
+    targets, _spread, reached = split_fleet_target(my_predbat, 80)
+    failed |= report(targets != [60, 100] or reached != 80, "matched_pair from 50/100 at 80%: expected [60, 100] reaching 80%, got {} reaching {}%".format(targets, reached))
+
+    # A 6 kW and a 4 kW inverter from 50% to 90%: the faster one's share is more than its battery holds
+    setup_fleet(my_predbat, "aio_hybrid", soc=50)
+    targets, _spread, reached = split_fleet_target(my_predbat, 90)
+    failed |= report(targets != [100, 83] or reached != 90, "aio_hybrid from 50% at 90%: expected [100, 83] reaching 90%, got {} reaching {}%".format(targets, reached))
+    return failed
+
+
+def test_target_split_ahead_is_not_held(my_predbat):
+    """
+    An inverter that is ahead of the fleet's SoC % but still has room keeps charging (#1484, fixed by #1492).
+
+    Before #1492 every inverter was sent the same % target, so the fuller 9.5 kWh battery reached a step target
+    while the 5.2 kWh was still at 17%, and Predbat paused it. The target sent to the inverter that is ahead must
+    stay well above what it has now, and above the fleet target itself.
+    """
+    print("Test: fleet target split does not hold an inverter that is ahead")
+    failed = False
+    setup_fleet(my_predbat, "issue_830", soc=[61, 17])
+    targets, _spread, reached = split_fleet_target(my_predbat, 62)
+    failed |= report(targets != [74, 40] or reached != 62, "issue_830 at 61/17 with a 62% fleet target: expected [74, 40] reaching 62%, got {} reaching {}%".format(targets, reached))
+    failed |= report(targets[0] <= 62, "the inverter ahead of the fleet % must be sent more than the fleet target of 62%, or it is paused while the other catches up (#1484), got {}%".format(targets[0]))
+    return failed
+
+
+def test_target_split_battery_scaling(my_predbat):
+    """
+    The split works in usable energy: battery_scaling reduces soc_max, so a 5.2 kWh battery that is 80% usable
+    is treated as 4.16 kWh and the fleet target is a percentage of that.
+
+    #830's own fleet - 9.5 kWh at 50% and 4.16 kWh usable at 70%, fleet target 66% - needs 1.35 kWh and neither
+    inverter is taken past the target.
+    """
+    print("Test: fleet target split with battery scaling")
+    setup_fleet(my_predbat, "issue_830_scaled", soc=[50, 70])
+    targets, _spread, reached = split_fleet_target(my_predbat, 66)
+    return report(targets != [57, 86] or reached != 66, "issue_830_scaled from 50/70 at 66%: expected [57, 86] reaching 66%, got {} reaching {}%".format(targets, reached))
+
+
+def test_target_split_exporting(my_predbat):
+    """
+    An export is split by discharge rate and stops at each inverter's own reserve, the energy it cannot give
+    being taken from the others. It used to be split by charge rate and the reserve only clamped the result, so
+    the fleet delivered less than the plan assumed (F2).
+    """
+    print("Test: fleet target split for an export")
+    # A backup battery with a 25% reserve next to a hybrid that can run down to 4%: the backup one stops at its reserve
+    # and the hybrid goes lower to deliver the fleet target. Before this the split was [25, 39], leaving the fleet at 10.8 kWh against 6.5 kWh
+    inverters = setup_fleet(my_predbat, "aio_hybrid", soc=80)
+    for inverter, reserve_percent in zip(inverters, [25, 4]):
+        inverter.reserve = dp3(inverter.soc_max * reserve_percent / 100.0)
+    targets, _spread, reached = split_fleet_target(my_predbat, 20, False, True)
+    return report(targets != [25, 16] or reached != 20, "aio_hybrid export from 80% to 20%: expected [25, 16] reaching 20%, got {} reaching {}%".format(targets, reached))
+
+
+def test_target_split_exporting_uses_discharge_rate(my_predbat):
+    """
+    An export is shared by discharge rate, not charge rate. The rig fixtures give every inverter the same charge and
+    discharge rate, so the discharge rates are set here on the inverters themselves.
+    """
+    print("Test: fleet target split for an export follows the discharge rate")
+    failed = False
+
+    # Two equal batteries at 80% exporting down to a 50% fleet target. Discharge rates of 3 kW and 1 kW share the 5.7 kWh
+    # 75% / 25%. Split by the equal charge rates, as it used to be, this was [50, 50]
+    inverters = setup_fleet(my_predbat, "matched_pair", soc=80)
+    for inverter, discharge_watts in zip(inverters, [3000, 1000]):
+        inverter.battery_rate_max_discharge = discharge_watts / 60000.0
+    targets, _spread, reached = split_fleet_target(my_predbat, 50, False, True)
+    failed |= report(targets != [35, 65] or reached != 50, "matched_pair export with discharge rates 3 kW / 1 kW: expected [35, 65] reaching 50%, got {} reaching {}%".format(targets, reached))
+
+    # An inverter limited to a discharge rate of 0 (inverter_limit_discharge) is given none of the export, the other gives it all
+    inverters = setup_fleet(my_predbat, "matched_pair", soc=80)
+    for inverter, discharge_watts in zip(inverters, [0, 2600]):
+        inverter.battery_rate_max_discharge = discharge_watts / 60000.0
+    targets, _spread, reached = split_fleet_target(my_predbat, 50, False, True)
+    failed |= report(targets != [80, 20] or reached != 50, "matched_pair export with one discharge rate of 0: expected [80, 20] reaching 50%, got {} reaching {}%".format(targets, reached))
+    return failed
+
+
+def test_split_change_by_rate(my_predbat):
+    """
+    The split itself, on plain numbers: (soc_kw, soc_max, reserve, rate) per inverter.
+    """
+    print("Test: split_change_by_rate")
+    failed = False
+    # (name, members, fleet change in kWh, expected per-inverter kWh)
+    cases = [
+        ("no change", [(5.0, 10.0, 0.0, 2.0), (5.0, 10.0, 0.0, 2.0)], 0.0, [5.0, 5.0]),
+        ("equal rates, equal shares", [(5.0, 10.0, 0.0, 2.0), (5.0, 10.0, 0.0, 2.0)], 2.0, [6.0, 6.0]),
+        ("shares follow the rates", [(0.0, 10.0, 0.0, 3.0), (0.0, 10.0, 0.0, 1.0)], 4.0, [3.0, 1.0]),
+        ("charge: one fills, the other takes the rest", [(8.0, 10.0, 0.0, 2.0), (0.0, 10.0, 0.0, 2.0)], 6.0, [10.0, 4.0]),
+        ("export: one stops at its reserve, the other gives the rest", [(8.0, 10.0, 5.0, 2.0), (8.0, 10.0, 0.0, 2.0)], -8.0, [5.0, 3.0]),
+        ("more than there is room for takes each to its limit", [(9.0, 10.0, 0.0, 2.0), (9.0, 10.0, 0.0, 2.0)], 5.0, [10.0, 10.0]),
+        ("an inverter with no rate gets nothing", [(0.0, 10.0, 0.0, 0.0), (0.0, 10.0, 0.0, 2.0)], 3.0, [0.0, 3.0]),
+    ]
+    for name, members, change, expected in cases:
+        got = [round(kwh, 6) for kwh in split_change_by_rate(change, members)]
+        failed |= report(got != expected, "{}: expected {} got {}".format(name, expected, got))
     return failed
 
 
@@ -248,6 +380,18 @@ def test_heterogeneous_fleet(my_predbat):
     """
     print("**** Running heterogeneous fleet tests ****\n")
     failed = False
-    for test in (test_fleet_fixtures, test_target_split, test_balance_power_envelope, test_balance_hair_trigger, test_force_export_balance_unreachable):
+    for test in (
+        test_fleet_fixtures,
+        test_target_split,
+        test_target_split_saturation,
+        test_target_split_ahead_is_not_held,
+        test_target_split_battery_scaling,
+        test_target_split_exporting,
+        test_target_split_exporting_uses_discharge_rate,
+        test_split_change_by_rate,
+        test_balance_power_envelope,
+        test_balance_hair_trigger,
+        test_force_export_balance_unreachable,
+    ):
         failed |= test(my_predbat)
     return failed
