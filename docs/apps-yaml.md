@@ -2908,6 +2908,7 @@ The grids only affect the accuracy of the plan - Predbat still instructs the inv
 Predbat learns both grids from your battery's own history, automatically, and falls back to the curves you set in `apps.yaml` (below) where it has no evidence. Learning is on by default:
 
 - **battery_rate_grid_auto** - set to `False` to plan with your `apps.yaml` curves only. The evidence is still gathered, so you can compare your curves with it on the Curves page.
+- **fleet_power_curves_enable** - set to `True` on a site with more than one inverter to hold the plan's rate curves under what the inverters can deliver from where they are now. An inverter that has run down to its reserve, or is full, or is held at a zero rate, drops out of the fleet's rate at that SoC, so the plan no longer assumes a rate (or energy) the inverters cannot deliver. It only ever lowers the curves, so a balanced fleet plans as before, and it makes no difference with one inverter. Default `False`.
 - **battery_rate_grid_history_days** - how many days of history the first scan reads (default 28). A long first read bypasses Predbat's history cache, so it does not keep that much history in memory afterwards.
 - **battery_rate_grid_scan_days** - how many days each daily scan reads (default 2).
 

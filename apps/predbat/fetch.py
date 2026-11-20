@@ -5073,6 +5073,7 @@ class Fetch:
         self.battery_temperature_charge_curve = self.validate_curve(self.args.get("battery_temperature_charge_curve", {}), "battery_temperature_charge_curve")
         self.battery_temperature_discharge_curve = self.validate_curve(self.args.get("battery_temperature_discharge_curve", {}), "battery_temperature_discharge_curve")
         self.battery_rate_grid_auto = bool(self.get_arg("battery_rate_grid_auto", True))
+        self.fleet_power_curves_enable = bool(self.get_arg("fleet_power_curves_enable", False))
         # How much history the rate grid scans read: the first (and any until one succeeds) and the daily ones
         self.battery_rate_grid_history_days = max(int(self.get_arg("battery_rate_grid_history_days", BATTERY_RATE_GRID_FIRST_SCAN_DAYS)), 1)
         self.battery_rate_grid_scan_days = max(int(self.get_arg("battery_rate_grid_scan_days", BATTERY_RATE_GRID_DAILY_SCAN_DAYS)), 1)

@@ -21,6 +21,8 @@ from datetime import timedelta
 from const import KEEP_TARGET_MIN_RATE, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
 from utils import (
+    derive_fleet_power_curves,
+    fleet_limited_rate_curve,
     remove_intersecting_windows,
     rate_curve_function,
     find_charge_rate,
@@ -178,6 +180,10 @@ class Prediction(PredictionBatch):
             self.battery_rate_max_discharge = base.battery_rate_max_discharge
             self.battery_rate_max_export = base.battery_rate_max_export
             self.battery_charge_rate_grid, self.battery_discharge_rate_grid = base.rate_grids()
+            # Several inverters: what the fleet can deliver at each aggregate SoC from where its inverters are now (#830)
+            self.fleet_charge_fractions, self.fleet_discharge_fractions = (None, None)
+            if getattr(base, "fleet_power_curves_enable", False):
+                self.fleet_charge_fractions, self.fleet_discharge_fractions = derive_fleet_power_curves(getattr(base, "inverters", []), self.soc_kw)
             self.battery_temperature = base.battery_temperature
             self.battery_temperature_prediction = base.battery_temperature_prediction
             self.battery_rate_max_scaling = base.battery_rate_max_scaling
@@ -536,6 +542,8 @@ class Prediction(PredictionBatch):
                 rate_grid_curve(self.battery_charge_rate_grid, temperature, rated=self.battery_rate_max_charge),
                 rate_grid_curve(self.battery_discharge_rate_grid, temperature, rated=self.battery_rate_max_discharge),
             )
+            if getattr(self, "fleet_charge_fractions", None) is not None:
+                curves = (fleet_limited_rate_curve(curves[0], self.fleet_charge_fractions), fleet_limited_rate_curve(curves[1], self.fleet_discharge_fractions))
             memo[temperature] = curves
         return curves
 

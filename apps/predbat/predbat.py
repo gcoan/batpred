@@ -680,6 +680,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_discharge_power_curve = {}
         self.battery_discharge_power_curve_default = {}
         self.battery_rate_grid_auto = True  # battery_rate_grid_auto: learn the charge/discharge rate grids from history
+        self.fleet_power_curves_enable = False  # fleet_power_curves_enable: hold the rate curves under what the inverters can deliver (multi-inverter sites)
         self.battery_charge_rate_grid = None  # engine grid (battery_rate_grid.py) the plan reads the charge ceiling from
         self.battery_discharge_rate_grid = None  # ... and the discharge ceiling
         self.battery_rate_grid_manual = {}  # "charge"/"discharge" -> the grid built from the manual curves (fallback and prior)
