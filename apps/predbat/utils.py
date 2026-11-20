@@ -2764,6 +2764,26 @@ def derive_fleet_power_curves(inverters, soc_total, battery_charge_curve=None, b
     return charge_curve, discharge_curve
 
 
+def describe_fleet_fractions(fractions):
+    """
+    Describe the fractions of the rated rate that a multi-inverter fleet can deliver (from derive_fleet_power_curves()) as the
+    ranges of SoC percent that they limit, for the log, for example "0-4% 0.0, 5-11% 0.32". "no limit" if there are none.
+    """
+    runs = []
+    for percent in range(101):
+        value = fractions.get(percent, 1.0)
+        if value >= 1.0:
+            continue
+        value = round(value, 2)
+        if runs and runs[-1][1] == percent - 1 and runs[-1][2] == value:
+            runs[-1][1] = percent
+        else:
+            runs.append([percent, percent, value])
+    if not runs:
+        return "no limit"
+    return ", ".join("{}% {}".format(start if start == end else "{}-{}".format(start, end), value) for start, end, value in runs)
+
+
 def fleet_limited_rate_curve(rate_curve, fractions):
     """
     A rate curve (battery_rate_grid.rate_grid_curve(): 101 SoC ceilings in kW per minute, the rated rate, the temperature cap)
