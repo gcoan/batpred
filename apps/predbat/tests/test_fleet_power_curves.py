@@ -148,5 +148,5 @@ def test_fleet_power_curves_prediction(my_predbat):
         print("ERROR: The curve's rated rate and temperature cap entries should be kept")
         failed = True
 
-    (my_predbat.inverters, my_predbat.soc_kw, my_predbat.soc_max, my_predbat.battery_rate_max_charge, my_predbat.battery_rate_max_discharge, my_predbat.fleet_power_curves_enable) = saved
+    my_predbat.inverters, my_predbat.soc_kw, my_predbat.soc_max, my_predbat.battery_rate_max_charge, my_predbat.battery_rate_max_discharge, my_predbat.fleet_power_curves_enable = saved
     return failed
