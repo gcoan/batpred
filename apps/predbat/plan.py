@@ -44,6 +44,7 @@ from const import (
 from utils import (
     calc_percent_limit,
     clone_windows,
+    describe_fleet_fractions,
     dp0,
     dp1,
     dp2,
@@ -2179,6 +2180,21 @@ class Plan:
             p90_signature = p50_signature
         self.pv_forecast_minute90_signatures = (p50_signature, p90_signature)
 
+    def log_fleet_power_curves(self):
+        """
+        Log that the fleet power curves are on (once), and what they limit in this plan run, as the limits follow the inverters' SoC
+        """
+        if not self.fleet_power_curves_enable:
+            return
+        prediction = self.prediction
+        if getattr(prediction, "fleet_charge_fractions", None) is None:
+            self.log("Fleet power curves: enabled but not in use, they need more than one inverter with a charge and discharge rate (found {})".format(len(self.inverters)))
+            return
+        if not self.fleet_power_curves_logged:
+            self.fleet_power_curves_logged = True
+            self.log("Fleet power curves: enabled for {} inverters, the plan's rate curves are held under what the inverters can deliver".format(len(self.inverters)))
+        self.log("Fleet power curves: charge limit {}; discharge limit {}".format(describe_fleet_fractions(prediction.fleet_charge_fractions), describe_fleet_fractions(prediction.fleet_discharge_fractions)))
+
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -2394,6 +2410,7 @@ class Plan:
         self.log("Prediction batch using {} kernel thread(s)".format(self.prediction.batch_threads))
         kernel_message, kernel_is_warning = kernel_status_summary(self.prediction)
         self.log("{}Prediction kernel: {}".format("Warn: " if kernel_is_warning else "", kernel_message))
+        self.log_fleet_power_curves()
 
         # Check if LoadML is active - it used to force the process pool off, which no longer exists;
         # the kernel's threads are C++ threads with no fork and no NumPy involvement

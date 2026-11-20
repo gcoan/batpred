@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 from const import PREDICT_STEP
 from prediction import Prediction
-from utils import derive_fleet_power_curves
+from utils import derive_fleet_power_curves, describe_fleet_fractions
 
 
 def _inverter(soc, cap, reserve_percent=4, rate_kw=2.6):
@@ -149,4 +149,52 @@ def test_fleet_power_curves_prediction(my_predbat):
         failed = True
 
     my_predbat.inverters, my_predbat.soc_kw, my_predbat.soc_max, my_predbat.battery_rate_max_charge, my_predbat.battery_rate_max_discharge, my_predbat.fleet_power_curves_enable = saved
+    return failed
+
+
+def test_fleet_power_curves_log(my_predbat):
+    """
+    Test the fleet power curve logging: the plain-language description of the limits, the one-time notice that the option is on,
+    the per-plan limits line and the notice when the option is on but cannot be used
+    """
+    failed = False
+    if describe_fleet_fractions({}) != "no limit" or describe_fleet_fractions({50: 1.0}) != "no limit":
+        print("ERROR: No limit should be described as 'no limit'")
+        failed = True
+    described = describe_fleet_fractions({0: 0.0, 1: 0.0, 2: 0.0, 5: 0.317, 6: 0.3171, 20: 0.5})
+    if described != "0-2% 0.0, 5-6% 0.32, 20% 0.5":
+        print("ERROR: Unexpected description of the limits: {}".format(described))
+        failed = True
+
+    messages = []
+    saved = (my_predbat.log, getattr(my_predbat, "prediction", None), my_predbat.inverters, getattr(my_predbat, "fleet_power_curves_enable", False), getattr(my_predbat, "fleet_power_curves_logged", False))
+    my_predbat.log = lambda text: messages.append(text)
+    my_predbat.inverters = [SimpleNamespace(), SimpleNamespace()]
+
+    my_predbat.fleet_power_curves_enable = False
+    my_predbat.fleet_power_curves_logged = False
+    my_predbat.prediction = SimpleNamespace(fleet_charge_fractions={}, fleet_discharge_fractions={})
+    my_predbat.log_fleet_power_curves()
+    if messages:
+        print("ERROR: Nothing should be logged when the option is off, got {}".format(messages))
+        failed = True
+
+    my_predbat.fleet_power_curves_enable = True
+    my_predbat.prediction = SimpleNamespace(fleet_charge_fractions={}, fleet_discharge_fractions={0: 0.0, 1: 0.0})
+    my_predbat.log_fleet_power_curves()
+    my_predbat.log_fleet_power_curves()
+    notices = [message for message in messages if "enabled for 2 inverters" in message]
+    limits = [message for message in messages if "charge limit no limit; discharge limit 0-1% 0.0" in message]
+    if len(notices) != 1 or len(limits) != 2:
+        print("ERROR: Expected one notice and a limits line each plan run, got {}".format(messages))
+        failed = True
+
+    del messages[:]
+    my_predbat.prediction = SimpleNamespace(fleet_charge_fractions=None, fleet_discharge_fractions=None)
+    my_predbat.log_fleet_power_curves()
+    if len(messages) != 1 or "not in use" not in messages[0]:
+        print("ERROR: Expected a not in use notice, got {}".format(messages))
+        failed = True
+
+    my_predbat.log, my_predbat.prediction, my_predbat.inverters, my_predbat.fleet_power_curves_enable, my_predbat.fleet_power_curves_logged = saved
     return failed

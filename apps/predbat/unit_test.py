@@ -34,7 +34,7 @@ from tests.test_dashboard_device_class import test_dashboard_device_class
 from tests.test_inverter_config_sensor import test_inverter_config_sensor
 from tests.test_solar_surplus import run_solar_surplus_tests
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
-from tests.test_fleet_power_curves import test_fleet_power_curves, test_fleet_power_curves_prediction
+from tests.test_fleet_power_curves import test_fleet_power_curves, test_fleet_power_curves_log, test_fleet_power_curves_prediction
 from tests.test_prediction_batch import run_prediction_batch_tests
 from tests.test_kernel_static_cache import run_kernel_static_cache_tests
 from tests.test_execute import run_execute_tests
@@ -607,6 +607,7 @@ def main():
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("fleet_power_curves", test_fleet_power_curves, "Derived multi-inverter power curves", False),
         ("fleet_power_curves_prediction", test_fleet_power_curves_prediction, "Derived multi-inverter curves reach the Prediction rate curves", False),
+        ("fleet_power_curves_log", test_fleet_power_curves_log, "Fleet power curve logging", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
         ("execute", run_execute_tests, "Execute tests", False),
