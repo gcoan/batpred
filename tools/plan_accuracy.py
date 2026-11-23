@@ -23,6 +23,9 @@ Run it from the coverage directory of a Predbat checkout (the replay needs the t
 Replays take around ten seconds each and are cached in plan_accuracy_cache/ next to the dumps, so
 adding new dumps and running again only replays the new ones.
 
+It also prints a second view of the plans that were really live, split by whether the option was on or off at the
+time (read from each dump), for an on-days versus off-days test. That view never uses a plan that was not run.
+
 Notes:
 - A replay re-plans from the dump's own inputs, it is not what the live system had planned
   at that moment (although it should be very close).
@@ -47,19 +50,28 @@ from datetime import datetime, timedelta
 INVERTER_FIELDS = ("id", "soc_kw", "soc_max", "reserve")
 
 
-def read_dump_state(path):
+def read_dump_state(path, option=None):
     """
     Read the time and the per-inverter battery state out of a debug dump without loading all of it.
 
-    Returns a dict with 'time' (datetime), 'soc_kw' and 'soc_max' (fleet totals in kWh) and 'inverters'
-    (a list of dicts with id, soc_kw, soc_max and reserve), or None if the dump has no usable state.
+    Returns a dict with 'time' (datetime), 'soc_kw' and 'soc_max' (fleet totals in kWh), 'inverters'
+    (a list of dicts with id, soc_kw, soc_max and reserve) and 'live' (the value the named boolean option
+    had when the dump was taken, True or False, or None if the dump does not record it), or None if the
+    dump has no usable state.
     """
     now_utc = None
+    live = None
+    option_line = re.compile(r"^{}:\s*(true|false)\s*$".format(re.escape(option)), re.IGNORECASE) if option else None
     inverters = []
     in_inverters = False
     current = None
     with open(path, "r", errors="replace") as handle:
         for line in handle:
+            if option_line:
+                found = option_line.match(line)
+                if found:
+                    live = found.group(1).lower() == "true"
+                    continue
             if not in_inverters:
                 if line.startswith("now_utc:"):
                     now_utc = line.split(":", 1)[1].strip()
@@ -87,6 +99,7 @@ def read_dump_state(path):
         "soc_kw": sum(inv["soc_kw"] for inv in inverters),
         "soc_max": sum(inv["soc_max"] for inv in inverters),
         "inverters": inverters,
+        "live": live,
     }
 
 
@@ -131,6 +144,37 @@ def predicted_percent(rows, when, tolerance_minutes=15):
     return float(best["soc_percent"])
 
 
+def print_live_view(live_errors, option):
+    """
+    Print the error of the plans that were really live, split by which setting was live, by horizon band and by day.
+
+    This is the view for an on-days versus off-days test: it never uses a plan that was not run, so it is not
+    confounded by what the batteries did following the other setting.
+    """
+    if not live_errors:
+        print("\nNo dump records {} as live, so there is no live-setting view".format(option))
+        return
+    bands = ((0, 2), (2.5, 4), (4.5, 6), (6.5, 8))
+    print("\nPlans that were live, by the setting live at the time ({} - predicted minus actual, percentage points)".format(option))
+    print("{:>12} {:>8}  {:>4} {:>8} {:>8} {:>10}".format("setting", "horizon", "n", "mean", "abs", "median abs"))
+    for live in (True, False):
+        for low, high in bands:
+            errors = [err for _, horizon, setting, err in live_errors if setting == live and low <= horizon <= high]
+            if not errors:
+                continue
+            print(
+                "{:>12} {:>3.1f}-{:<3.1f}h  {:>4} {:>+8.1f} {:>8.1f} {:>10.1f}".format(
+                    "on" if live else "off", low, high, len(errors), sum(errors) / len(errors), sum(abs(x) for x in errors) / len(errors), statistics.median(abs(x) for x in errors)
+                )
+            )
+    print("\nBy day the plan was made (all horizons up to the maximum)")
+    print("{:>8} {:>8}  {:>4} {:>8} {:>8} {:>10}".format("day", "setting", "n", "mean", "abs", "median abs"))
+    days = sorted({(start.date(), setting) for start, _, setting, _ in live_errors})
+    for day, setting in days:
+        errors = [err for start, _, live, err in live_errors if start.date() == day and live == setting]
+        print("{:>8} {:>8}  {:>4} {:>+8.1f} {:>8.1f} {:>10.1f}".format(day.strftime("%d %b"), "on" if setting else "off", len(errors), sum(errors) / len(errors), sum(abs(x) for x in errors) / len(errors), statistics.median(abs(x) for x in errors)))
+
+
 def main():
     """
     Replay the dumps and print the error table.
@@ -148,7 +192,7 @@ def main():
     files = sorted(glob.glob(os.path.join(args.dumps, "*.yaml")) + glob.glob(os.path.join(args.dumps, "*.yaml.txt")))
     states = []
     for path in files:
-        state = read_dump_state(path)
+        state = read_dump_state(path, args.option)
         if state:
             states.append((state["time"], path, state))
         else:
@@ -161,6 +205,7 @@ def main():
 
     results = {True: {}, False: {}}
     detail = []
+    live_errors = []
     for index, (start, path, state) in enumerate(states):
         later = [item for item in states[index + 1 :] if item[0] - start <= timedelta(hours=args.max_horizon)]
         if not later:
@@ -178,6 +223,10 @@ def main():
                 error = predicted - actual
                 results[value].setdefault(horizon, []).append(error)
                 detail.append((start, end, value, predicted, actual))
+                # The plan that was really live: the replay with the setting the dump had, scored only where the
+                # setting did not change between the two dumps, so each comparison belongs to one setting
+                if state["live"] is not None and value == state["live"] and end_state["live"] == state["live"]:
+                    live_errors.append((start, horizon, state["live"], error))
 
     print("\nPredicted minus actual fleet SoC, percentage points ({} on versus off)".format(args.option))
     print("mean is the average signed error, abs the average size of the error, median abs the typical size (one odd plan can swing the means)")
@@ -200,6 +249,8 @@ def main():
                 statistics.median(abs(x) for x in off),
             )
         )
+    print_live_view(live_errors, args.option)
+
     print("\nEach comparison")
     print("{:>16} {:>16}   {:>9} {:>9} {:>9}".format("plan from", "compared at", "on", "off", "actual"))
     by_pair = {}
