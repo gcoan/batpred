@@ -40,6 +40,7 @@ import os
 import re
 import shutil
 import subprocess
+import statistics
 import sys
 from datetime import datetime, timedelta
 
@@ -179,7 +180,8 @@ def main():
                 detail.append((start, end, value, predicted, actual))
 
     print("\nPredicted minus actual fleet SoC, percentage points ({} on versus off)".format(args.option))
-    print("{:>8}  {:>4}  {:>10} {:>10}   {:>10} {:>10}".format("horizon", "n", "on mean", "on abs", "off mean", "off abs"))
+    print("mean is the average signed error, abs the average size of the error, median abs the typical size (one odd plan can swing the means)")
+    print("{:>8}  {:>4}  {:>8} {:>8} {:>10}   {:>8} {:>8} {:>10}".format("horizon", "n", "on mean", "on abs", "on med abs", "off mean", "off abs", "off med abs"))
     for horizon in sorted(set(results[True]) | set(results[False])):
         on = results[True].get(horizon, [])
         off = results[False].get(horizon, [])
@@ -187,8 +189,15 @@ def main():
         if not count:
             continue
         print(
-            "{:>7.1f}h  {:>4}  {:>+10.1f} {:>10.1f}   {:>+10.1f} {:>10.1f}".format(
-                horizon, count, sum(on) / len(on), sum(abs(x) for x in on) / len(on), sum(off) / len(off), sum(abs(x) for x in off) / len(off)
+            "{:>7.1f}h  {:>4}  {:>+8.1f} {:>8.1f} {:>10.1f}   {:>+8.1f} {:>8.1f} {:>10.1f}".format(
+                horizon,
+                count,
+                sum(on) / len(on),
+                sum(abs(x) for x in on) / len(on),
+                statistics.median(abs(x) for x in on),
+                sum(off) / len(off),
+                sum(abs(x) for x in off) / len(off),
+                statistics.median(abs(x) for x in off),
             )
         )
     print("\nEach comparison")
