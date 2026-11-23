@@ -21,6 +21,8 @@ from datetime import timedelta
 from const import KEEP_TARGET_MIN_RATE, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
 from utils import (
+    derive_fleet_power_curves,
+    fleet_limited_rate_curve,
     remove_intersecting_windows,
     rate_curve_function,
     find_charge_rate,
@@ -32,6 +34,7 @@ from utils import (
     export_target_of,
     pack_export_limit,
 )
+from car_cancel import cancelled_mask, step_reverted
 from prediction_batch import EXPORT_FLOOR_SCENARIOS, PredictionBatch, export_end_soc_from_series, floor_export_limits, prediction_cache_key
 from battery_rate_grid import rate_grid_curve
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
@@ -86,6 +89,7 @@ class Prediction(PredictionBatch):
         soc_max=None,
         kernel_static_cache=None,
         car_charging_slots=None,
+        car_cancel=None,
     ):
         """Build a Prediction, optionally copying simulation state from a base PredBat instance.
 
@@ -97,7 +101,12 @@ class Prediction(PredictionBatch):
 
         car_charging_slots, when given, replaces base.car_charging_slots - the live plan passes
         car_charging_slots_model() so a car charging now outside its plan is modelled too.
+
+        car_cancel, when given, is the car_cancel.CarCancelTable for those slots: a target export over a slot in
+        it cancels that slot in the prediction. Only the live plan passes one; None leaves the engine unchanged.
         """
+        # Set before the kernel context is built below, which copies the table into it
+        self.car_cancel = car_cancel
         if base:
             self.minutes_now = base.minutes_now
             self.log = base.log
@@ -178,6 +187,10 @@ class Prediction(PredictionBatch):
             self.battery_rate_max_discharge = base.battery_rate_max_discharge
             self.battery_rate_max_export = base.battery_rate_max_export
             self.battery_charge_rate_grid, self.battery_discharge_rate_grid = base.rate_grids()
+            # Several inverters: what the fleet can deliver at each aggregate SoC from where its inverters are now (#830)
+            self.fleet_charge_fractions, self.fleet_discharge_fractions = (None, None)
+            if getattr(base, "fleet_power_curves_enable", False):
+                self.fleet_charge_fractions, self.fleet_discharge_fractions = derive_fleet_power_curves(getattr(base, "inverters", []), self.soc_kw)
             self.battery_temperature = base.battery_temperature
             self.battery_temperature_prediction = base.battery_temperature_prediction
             self.battery_rate_max_scaling = base.battery_rate_max_scaling
@@ -536,6 +549,8 @@ class Prediction(PredictionBatch):
                 rate_grid_curve(self.battery_charge_rate_grid, temperature, rated=self.battery_rate_max_charge),
                 rate_grid_curve(self.battery_discharge_rate_grid, temperature, rated=self.battery_rate_max_discharge),
             )
+            if getattr(self, "fleet_charge_fractions", None) is not None:
+                curves = (fleet_limited_rate_curve(curves[0], self.fleet_charge_fractions), fleet_limited_rate_curve(curves[1], self.fleet_discharge_fractions))
             memo[temperature] = curves
         return curves
 
@@ -590,6 +605,21 @@ class Prediction(PredictionBatch):
                     # Store in cache without the SoC/car data to save memory, mirroring the Python engine
                     self.prediction_cache[sim_hash] = kernel_result[:11] + ([], []) + kernel_result[13:]
                 return kernel_result
+
+        # The car slots this plan's target exports cancel, read from the limits as passed in: flooring never
+        # changes a window's mode. With no table or nothing cancelled the engine runs exactly as without one.
+        car_cancel = self.car_cancel
+        cancel_mask = 0
+        if car_cancel is not None:
+            cancel_mask = cancelled_mask(car_cancel.slots, export_window, export_limits)
+            if not cancel_mask:
+                car_cancel = None
+        cancel_n_steps = car_cancel.n_steps if car_cancel is not None else 0
+        cancel_slot_flat = car_cancel.slot_flat if car_cancel is not None else None
+        cancel_penalty_rate = car_cancel.penalty_rate if car_cancel is not None else 0
+        cancel_floor_kw = car_cancel.floor_kw if car_cancel is not None else None
+        # The energy each car would have bought in its cancelled slots so far, which the room left in it caps
+        car_cancelled_kwh = [0.0] * self.num_cars if car_cancel is not None else None
 
         if export_floor_soc is not None:
             export_limits = floor_export_limits(export_limits, export_floor_soc, self.soc_max)
@@ -795,6 +825,11 @@ class Prediction(PredictionBatch):
             dispatch_rate = import_rate
             dispatch_gone = io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30
             dispatch_risk = 0
+            if car_cancel is not None and step_reverted(car_cancel, minute // PREDICT_STEP, cancel_mask):
+                # Every dispatch here is cancelled, so the half hour is billed at peak, and it is no longer a dispatch that can go away
+                import_rate = car_cancel.revert_rate[minute // PREDICT_STEP]
+                dispatch_rate = import_rate
+                dispatch_gone = False
             if dispatch_gone and io_confirmed_credit.get(minute_absolute, 0):
                 # The car is charging in this run (io_confirmed_credit_update()), so a dispatch that goes away is seen
                 # within a Predbat cycle: the dispatch is kept, and the house and battery pay RUN_EVERY minutes of each
@@ -941,6 +976,17 @@ class Prediction(PredictionBatch):
                     if car_load[car_n] > 0.0:
                         car_load_scale = car_load[car_n] * step / 60.0
                         car_load_scale = car_load_scale * self.car_charging_loss
+                        if car_cancel is not None:
+                            cancel_j = cancel_slot_flat[car_n * cancel_n_steps + minute // PREDICT_STEP]
+                            if cancel_j >= 0 and (cancel_mask >> cancel_j) & 1:
+                                # Cancelled for an export: the car buys nothing here and keeps its room for later, but the
+                                # energy it would have bought - at least its full charge rate, capped by the room left - must be bought back at peak (score only).
+                                # A later uncancelled slot may refill that room, so the penalty can double-count: a deliberate conservative bias
+                                car_load_scale = max(car_load_scale, cancel_floor_kw[cancel_j] * step / 60.0 * self.car_charging_loss)
+                                car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n] - car_cancelled_kwh[car_n]), 0)
+                                car_cancelled_kwh[car_n] += car_load_scale
+                                metric_keep += car_load_scale / self.car_charging_loss * cancel_penalty_rate
+                                continue
                         car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
                         car_soc[car_n] = car_soc[car_n] + car_load_scale
 
@@ -1374,6 +1420,9 @@ class Prediction(PredictionBatch):
                 if force_charging and io_confirmed_credit:
                     # Bird in hand: score only credit for what a charge window stores in a confirmed dispatch run
                     credit = io_confirmed_credit.get(minute_absolute, 0)
+                    if credit and car_cancel is not None and step_reverted(car_cancel, minute // PREDICT_STEP, cancel_mask):
+                        # The dispatch is cancelled, so there is no confirmed run to bank
+                        credit = 0
                     if credit:
                         metric_keep -= min(-battery_draw * battery_loss, soc_max - soc) * credit
                 soc = min(soc - battery_draw * battery_loss, soc_max)

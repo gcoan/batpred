@@ -42,6 +42,9 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    POWER_SERVICES,
+    OCTOPUS_API_URL,
+    OCTOPUS_LEGACY_API_HOST,
     BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
     BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK,
 )
@@ -291,6 +294,10 @@ class MinuteArray:
 # carrying it cannot be replayed (#5569) - and a replay has no use for which log lines were already written.
 # The rate grid evidence (a year of samples) and the grids derived from the learned ones are rebuilt on replay
 # (rate_grids()), so only battery_rate_grid_learned is dumped - every debug_history snapshot would otherwise carry them.
+# control_ledger and control_monitor are execution-side runtime state: a replay only re-plans (calculate_plan), so it
+# never reads them, and the events they hold already reach predbat.log and the control_conflicts/control_failures
+# sensors. As Python objects they were the only !!python/object tags in a fresh dump, and a newer dump on an older
+# tree failed to load on them (GH#5719).
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -318,6 +325,8 @@ DEBUG_EXCLUDE_LIST = [
     "battery_rate_grid_manual",
     "battery_charge_rate_grid",
     "battery_discharge_rate_grid",
+    "control_ledger",
+    "control_monitor",
 ]
 
 
@@ -1011,6 +1020,46 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
     return results
 
 
+def services_send_power(args, direction=None, index=None):
+    """
+    Whether any start or freeze service (POWER_SERVICES) in apps.yaml sends the charge/discharge rate as {power}.
+
+    With a direction ("charge" or "discharge") only that direction's services count, as a rate sent
+    to a charge hook says nothing about what the discharge side was given.
+
+    A service given by name alone is passed every default option, power included. A template entry
+    passes only the keys it lists, so it sends the rate only where one of its values references {power}.
+    Only a string value is formatted, or each string in a per-inverter list; a nested mapping is passed
+    as it is, so a {power} inside one is never filled in and does not count. With an inverter index only
+    that inverter's entry of a per-inverter list counts, as it is the one that inverter is sent; without
+    one, any inverter's does.
+    """
+
+    def formats_power(value):
+        """Whether call_service_template() fills in {power} for this template value."""
+        # {power}, or with a format spec or conversion such as {power:.0f}, as str.format() takes it
+        if not isinstance(value, list):
+            items = [value]
+        elif index is None:
+            items = value
+        else:
+            items = value[index : index + 1]
+        return any(isinstance(item, str) and re.search(r"\{power[}:!]", item) for item in items)
+
+    for service in POWER_SERVICES:
+        if direction and not service.startswith(direction + "_"):
+            continue
+        templates = args.get(service)
+        if not templates:
+            continue
+        for template in templates if isinstance(templates, list) else [templates]:
+            if isinstance(template, str):
+                return True
+            if isinstance(template, dict) and any(formats_power(value) for key, value in template.items() if key != "service"):
+                return True
+    return False
+
+
 def is_entity_id(value):
     """
     Whether a resolved apps.yaml value names a Home Assistant entity rather than being a literal.
@@ -1443,6 +1492,18 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True, whole_span=F
         first_minute = int(max_age.total_seconds() / 60)
         mdata = {minute: value for minute, value in mdata.items() if minute <= first_minute}
     return [mdata, max_days]
+
+
+OCTOPUS_LEGACY_API_RE = re.compile(r"^https?://" + re.escape(OCTOPUS_LEGACY_API_HOST) + r"(?=[/?#:]|$)", re.IGNORECASE)
+
+
+def migrate_octopus_url(url):
+    """Return url with the retired Octopus API host (api.octopus.energy) replaced by its successor (GH#5786).
+
+    Anything else - another host, a non-string, None - is returned unchanged."""
+    if not isinstance(url, str):
+        return url
+    return OCTOPUS_LEGACY_API_RE.sub(OCTOPUS_API_URL, url, count=1)
 
 
 def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
@@ -2654,6 +2715,147 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
             new_limit_best.append(limit)
 
     return new_limit_best, new_window_best
+
+
+def _share_by_weight(total, room, weights):
+    """
+    Share total across members in proportion to their weights, giving what a member has no room for to the others
+    """
+    out = [0.0] * len(room)
+    open_members = [i for i in range(len(room)) if room[i] > 1e-12 and weights[i] > 0]
+    left = total
+    while open_members and left > 1e-12:
+        total_weight = sum(weights[i] for i in open_members)
+        shares = {i: left * weights[i] / total_weight for i in open_members}
+        full = [i for i in open_members if shares[i] > room[i]]
+        if not full:
+            for i in open_members:
+                out[i] = shares[i]
+            return out
+        for i in full:
+            left -= room[i]
+            out[i] = room[i]
+            open_members.remove(i)
+    return out
+
+
+def derive_fleet_power_curves(inverters, soc_total, battery_charge_curve=None, battery_discharge_curve=None):
+    """
+    Build the aggregate battery power curves of a multi-inverter fleet from what each inverter can deliver at its own SoC (#830)
+
+    The simulator models the fleet as one battery with a power curve: a fraction of the summed nominal rate against the
+    aggregate SoC in percent. With several inverters that fraction is not flat: an inverter that has run down to its
+    reserve (or filled up) drops out, and the rate the fleet can give falls with it. This works out that fraction at each
+    aggregate SoC so the simulator stops promising a rate the inverters cannot deliver.
+
+    The path through the inverters' SoCs is that of the executor, which shares a change between the inverters by their
+    rates: discharging down from today's state and charging up from it. Below today's SoC a charge starts from an emptied
+    fleet and above today's SoC a discharge starts from a level fleet, as that is where those start from in a plan.
+
+    Args:
+        inverters: list of inverters (objects or dictionaries) with soc_kw, soc_max, reserve, battery_rate_max_charge and
+            battery_rate_max_discharge
+        soc_total: the aggregate SoC in kWh; the inverters' SoCs are scaled to match if they disagree
+        battery_charge_curve: the taper each battery follows when charging (percent: fraction), applied at each inverter's own SoC
+        battery_discharge_curve: the same when discharging
+
+    Returns:
+        (charge curve, discharge curve) as dictionaries of percent to fraction, leaving out entries at 1.0 as that is the
+        default. None, None if there is nothing to derive (one inverter, or no rate)
+    """
+    if len(inverters) < 2:
+        return None, None
+
+    def get(inverter, name):
+        return inverter[name] if isinstance(inverter, dict) else getattr(inverter, name)
+
+    soc = [get(i, "soc_kw") for i in inverters]
+    cap = [get(i, "soc_max") for i in inverters]
+    reserve = [get(i, "reserve") for i in inverters]
+    rate_charge = [get(i, "battery_rate_max_charge") for i in inverters]
+    rate_discharge = [get(i, "battery_rate_max_discharge") for i in inverters]
+    sum_charge = sum(rate_charge)
+    sum_discharge = sum(rate_discharge)
+    cap_total = sum(cap)
+    if cap_total <= 0 or sum_charge <= 0 or sum_discharge <= 0:
+        return None, None
+
+    listed = sum(soc)
+    if listed > 0 and abs(listed - soc_total) > 0.01:
+        soc = [s * soc_total / listed for s in soc]
+
+    charge_taper = battery_charge_curve or {}
+    discharge_taper = battery_discharge_curve or {}
+    members = range(len(soc))
+
+    def percent(value, size):
+        return 0 if size <= 0 else min(max(int(round(100.0 * value / size)), 0), 100)
+
+    charge_curve = {}
+    discharge_curve = {}
+    for pc in range(101):
+        target = cap_total * pc / 100.0
+
+        # Discharge: down from today's state, or from a level fleet above it
+        if target <= soc_total:
+            room = [max(soc[i] - reserve[i], 0.0) for i in members]
+            moved = _share_by_weight(soc_total - target, room, rate_discharge)
+            level = [soc[i] - moved[i] for i in members]
+        else:
+            level = [cap[i] * pc / 100.0 for i in members]
+        power = sum(rate_discharge[i] * discharge_taper.get(percent(level[i], cap[i]), 1.0) for i in members if level[i] > reserve[i] + 1e-6)
+        discharge_curve[pc] = power / sum_discharge
+
+        # Charge: up from today's state, or from an emptied fleet below it
+        if target >= soc_total:
+            room = [max(cap[i] - soc[i], 0.0) for i in members]
+            moved = _share_by_weight(target - soc_total, room, rate_charge)
+            level = [soc[i] + moved[i] for i in members]
+        else:
+            empty = [min(reserve[i], soc[i]) for i in members]
+            room = [max(cap[i] - empty[i], 0.0) for i in members]
+            moved = _share_by_weight(max(target - sum(empty), 0.0), room, rate_charge)
+            level = [empty[i] + moved[i] for i in members]
+        power = sum(rate_charge[i] * charge_taper.get(percent(level[i], cap[i]), 1.0) for i in members if level[i] < cap[i] - 1e-6)
+        charge_curve[pc] = power / sum_charge
+
+    # Leave out the entries at 1.0, the curve lookup defaults to it, which keeps the Python simulator's per-step cost down
+    charge_curve = {pc: round(v, 4) for pc, v in charge_curve.items() if abs(v - 1.0) > 1e-4}
+    discharge_curve = {pc: round(v, 4) for pc, v in discharge_curve.items() if abs(v - 1.0) > 1e-4}
+    return charge_curve, discharge_curve
+
+
+def describe_fleet_fractions(fractions):
+    """
+    Describe the fractions of the rated rate that a multi-inverter fleet can deliver (from derive_fleet_power_curves()) as the
+    ranges of SoC percent that they limit, for the log, for example "0-4% 0.0, 5-11% 0.32". "no limit" if there are none.
+    """
+    runs = []
+    for percent in range(101):
+        value = fractions.get(percent, 1.0)
+        if value >= 1.0:
+            continue
+        value = round(value, 2)
+        if runs and runs[-1][1] == percent - 1 and runs[-1][2] == value:
+            runs[-1][1] = percent
+        else:
+            runs.append([percent, percent, value])
+    if not runs:
+        return "no limit"
+    return ", ".join("{}% {}".format(start if start == end else "{}-{}".format(start, end), value) for start, end, value in runs)
+
+
+def fleet_limited_rate_curve(rate_curve, fractions):
+    """
+    A rate curve (battery_rate_grid.rate_grid_curve(): 101 SoC ceilings in kW per minute, the rated rate, the temperature cap)
+    held under what a multi-inverter fleet can deliver, given as the fraction of the rated rate at each SoC percent.
+
+    It only ever lowers the curve, so a fleet that can deliver the full rate everywhere leaves it unchanged, and what the
+    rate grid has learned about the battery is kept where it is already the lower.
+    """
+    rated = rate_curve[101]
+    limited = tuple(min(rate_curve[percent], fractions.get(percent, 1.0) * rated) for percent in range(101))
+    return limited + tuple(rate_curve[101:])
 
 
 def rate_curve_ceiling(soc, soc_max, rate_max, rate_curve):
